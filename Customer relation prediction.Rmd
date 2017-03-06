@@ -1,0 +1,333 @@
+---
+output:
+  word_document: default
+  html_document: default
+---
+
+# Getting the Data#######################
+```{r}
+
+PackageList =c('MASS','gbm','tree','randomForest','rpart','caret','ROCR','readxl','data.table','R.utils') 
+NewPackages=PackageList[!(PackageList %in% 
+                            installed.packages()[,"Package"])]
+if(length(NewPackages)) install.packages(NewPackages)
+lapply(PackageList,require,character.only=TRUE)#array function
+
+
+
+gitURL="https://github.com/ChicagoBoothML/MLClassData/raw/master/KDDCup2009_Customer_relationship/";
+DownloadFileList=c("orange_small_train.data.gz","orange_small_train_appetency.labels.txt",
+                   "orange_small_train_churn.labels.txt","orange_small_train_upselling.labels.txt")
+LoadFileList=c("orange_small_train.data","orange_small_train_appetency.labels.txt",
+               "orange_small_train_churn.labels.txt","orange_small_train_upselling.labels.txt")
+
+for (i in 1:length(LoadFileList)){
+  if (!file.exists(LoadFileList[[i]])){
+    if (LoadFileList[[i]]!=DownloadFileList[[i]]) {
+      download.file(paste(gitURL,DownloadFileList[[i]],sep=""),destfile=DownloadFileList[[i]])
+      gunzip(DownloadFileList[[i]])
+    }else{
+      download.file(paste(gitURL,DownloadFileList[[i]],sep=""),destfile=DownloadFileList[[i]])}}
+}
+
+na_strings <- c('',
+                'na', 'n.a', 'n.a.',
+                'nan', 'n.a.n', 'n.a.n.',
+                'NA', 'N.A', 'N.A.',
+                'NaN', 'N.a.N', 'N.a.N.',
+                'NAN', 'N.A.N', 'N.A.N.',
+                'nil', 'Nil', 'NIL',
+                'null', 'Null', 'NULL')
+
+X=as.data.table(read.table('orange_small_train.data',header=TRUE,
+                           sep='\t', stringsAsFactors=TRUE, na.strings=na_strings))
+Y_churn    =read.table("orange_small_train_churn.labels.txt", quote="\"")
+Y_appetency=read.table("orange_small_train_appetency.labels.txt", quote="\"")
+Y_upselling=read.table("orange_small_train_upselling.labels.txt", quote="\"")
+
+```
+
+```{r}
+# deviance loss function
+# y should be 0/1
+# phat are probabilities obtain by our algorithm 
+# thr is the cut off value - everything above thr is classified as 1
+lossMR = function(y,phat,thr=0.5) {
+  if(is.factor(y)) y = as.numeric(y)-1
+  yhat = ifelse(phat > thr, 1, 0)
+  return(1 - mean(yhat == y))
+}
+
+
+lossf = function(y,phat,wht=0.0000001) {
+  if(is.factor(y)) y = as.numeric(y)-1
+  phat = (1-wht)*phat + wht*.5
+  py = ifelse(y==1, phat, 1-phat)
+  return(-2*sum(log(py)))
+}
+
+```
+
+```{r}
+# Drop columns contain too many missing values
+
+var_na=c()
+
+for (i in names(X)){
+  CurrentColumn=X[[i]]
+  CurrentColumnVariableName=i
+  #Then you do the computation on CurrentColumn, using function is.na, and save the result
+  #cat(i, mean(is.na(CurrentColumn)),'\n')
+  if (mean(is.na(CurrentColumn))>0.9){var_na[i]=CurrentColumnVariableName
+        }
+}
+
+
+ExcludeVars=var_na #for example
+idx=!(names(X) %in% ExcludeVars);
+XS=X[,!(names(X) %in% ExcludeVars),with=FALSE]
+
+
+XS_N_C=c()
+XS_N_C= sapply(XS, is.numeric)
+count_Num=length(which(XS_N_C=='TRUE'))
+count_Cat=length(which(XS_N_C=='FALSE'))
+
+              
+for(i in 1:count_Num){
+ CurrentColumn=XS[[i]]                    #Extraction of column
+ idx=is.na(CurrentColumn)                 #Locate the NAs
+ CurrentColumn[idx]=paste(mean(CurrentColumn,na.rm=TRUE),sep="") #Add the new NA level strings
+ XS[[i]]=CurrentColumn                    #Plug-back to the data.frame
+}
+
+```
+
+```{r}
+# Convert missing values into factors for categorical vairable
+
+for(i in count_Num+1:count_Cat){
+
+CurrentColumn=XS[[i]]                    #Extraction of column
+idx=is.na(CurrentColumn)                 #Locate the NAs
+CurrentColumn=as.character(CurrentColumn)#Convert from factor to characters
+CurrentColumn[idx]=paste(i,'_NA',sep="") #Add the new NA level strings
+CurrentColumn=as.factor(CurrentColumn)   #Convert back to factors
+XS[[i]]=CurrentColumn     
+
+}
+
+
+# Aggregate a number of factors into new factors
+
+Thres_Low=249;
+Thres_Medium=499;
+Thres_High=999;
+
+for(i in count_Num+1:count_Cat){
+
+CurrentColumn=XS[[i]]                    #Extraction of column
+
+CurrentColumn_Table=table(CurrentColumn) #Tabulate the frequency
+levels(CurrentColumn)[CurrentColumn_Table<=Thres_Low]=paste(i,'_Low',sep="")
+
+CurrentColumn_Table=table(CurrentColumn) #Tabulate the new frequency 
+levels(CurrentColumn)[CurrentColumn_Table>Thres_Low & CurrentColumn_Table<=Thres_Medium ]=paste(i,'_Medium',sep="")
+
+CurrentColumn_Table=table(CurrentColumn) #Tabulate the new frequency
+levels(CurrentColumn)[CurrentColumn_Table>Thres_Medium & CurrentColumn_Table<=Thres_High ]=paste(i,'_High',sep="")
+
+XS[[i]]=CurrentColumn                    #Plug-back to the data.frame
+
+}
+
+
+Y_churn[Y_churn$V <0 ,] <- 0
+
+
+
+XS$Y_churn=Y_churn
+
+
+
+# Split the data
+set.seed(99)
+n=nrow(XS)
+Tr_V_XS=sample.int(n,floor(0.8*n))
+XS_Tr_V=XS[Tr_V_XS,]
+XS_Test=XS[-Tr_V_XS,]
+
+n=nrow(XS_Tr_V)
+Train_XS=sample.int(n,floor(0.625*n))
+XS_Train=XS_Tr_V[Train_XS,]
+XS_Validation=XS_Tr_V[-Train_XS,]
+
+```
+
+```{r}
+
+# Fit arandom forest model for Y_Churn to identify important vairables
+
+XS_Train$Y_churn = as.factor(XS_Train$Y_churn)
+XS_Validation$Y_churn = as.factor(XS_Validation$Y_churn)
+
+
+
+
+frf = randomForest(Y_churn~.,              #model
+                   data=XS_Train, #data set
+                   mtry=10,     #number of variables to sample
+                   ntree=1000,  #number of trees to grow
+                   nodesize=10,#minimum node size on trees (optional)
+                   maxnodes=10,#maximum number of terminal nodes (optional)
+                   importance=TRUE#calculate variable importance measure (optional)
+)
+
+
+
+par(mfrow=c(1,1))
+varImpPlot(frf)
+fif_imp=importance(frf) #This should be a matrix with 4 columns
+
+
+XS_Train$Var217 = as.factor(XS_Train$Var217)
+XS_Validation$Var217 = as.factor(XS_Validation$Var217)
+
+
+XS_Train$Var218 = as.factor(XS_Train$Var218)
+XS_Validation$Var218 = as.factor(XS_Validation$Var218)
+
+# Select the top 7 important vairables for the subsets
+
+t <- subset(XS_Train, select=c("Y_churn", "Var126","Var217","Var218","Var189","Var13","Var74","Var140"))
+
+v <- subset(XS_Validation, select=c("Y_churn", "Var126","Var217","Var218","Var189","Var13","Var74","Var140"))
+
+s <- subset(XS_Test, select=c("Y_churn", "Var126","Var217","Var218","Var189","Var13","Var74","Var140"))
+
+```
+
+#Random Forest
+
+```{R}
+
+p=ncol(t)-1
+mtry_vec = c(1:2)
+tree_num = c(100,500)
+nnodesize=c(10,20)
+RF_params = expand.grid(mtry_vec,tree_num,nnodesize)
+colnames(RF_params)=c("mtry","ntree","nnodesize")
+num_params_2 = nrow(RF_params)
+out_bag_error_rf = rep(0,num_params_2)
+in_bag_error_rf = rep(0,num_params_2)
+results = vector("list",num_params_2)
+for(i in 1:num_params_2) {
+  fit_rf = randomForest(Y_churn~.,data=t,
+                        mtry=RF_params[i,1],
+                        ntree=RF_params[i,2],
+                        nodesize=RF_params[i,3]
+  )
+  
+  ifit = as.numeric(predict(fit_rf,type="prob"))
+  ofit= as.numeric(predict(fit_rf,newdata=v,type="prob"))
+  out_bag_error_rf[i] = sum((as.numeric(v$Y_churn)-ofit)^2)
+  in_bag_error_rf[i] = sum((as.numeric(t$Y_churn)-ifit)^2)
+  results[[i]]=fit_rf
+}
+in_bag_error_rf = sqrt(in_bag_error_rf/nrow(t)) 
+out_bag_error_rf= sqrt(out_bag_error_rf/nrow(v))
+
+```
+
+```{r}
+
+#print losses
+
+print(cbind(RF_params,out_bag_error_rf,in_bag_error_rf))
+
+min(out_bag_error_rf)
+RF_params[which.min(out_bag_error_rf),]
+best_rf = results[[which.min(out_bag_error_rf)]]
+
+
+#random forest plot
+
+phatL=list()
+phatL2=list()
+
+p=ncol(t)-1
+mtryv = c(sqrt(p))
+ntreev = c(100,500)
+nnodesize=c(10,20)
+
+mtryv = c(1:2)
+ntreev = c(100,500)
+nnodesize=c(10,20)
+
+
+setrf = expand.grid(mtryv,ntreev,nnodesize) # this contains all settings to try
+colnames(setrf)=c("mtry","ntree",'nodesize')
+phatL$rf = matrix(0.0,nrow(v),nrow(setrf)) # we will store results here
+phatL2$rf = matrix(0.0,nrow(s),nrow(setrf)) # we will store results here
+
+for(i in 1:nrow(setrf)) {
+  #fit and predict
+  cat('Now i=',i ,'/',nrow(setrf), ', ')
+  frf = randomForest(Y_churn~., data=t,
+                     mtry=setrf[i,1],
+                     ntree=setrf[i,2],
+                     nodesize=setrf[i,3])
+  phat = predict(frf, newdata=v, type="prob")[,2]
+  phatL$rf[,i]=phat
+  phat = predict(frf, newdata=s, type="prob")[,2]
+  phatL2$rf[,i]=phat
+  
+  
+}
+
+```
+
+```{r}
+
+# Loss on validation set
+
+lossL = list()
+nmethod = length(phatL)
+for(i in 1:nmethod) {
+  nrun = ncol(phatL[[i]])
+  lvec = rep(0,nrun)
+  for(j in 1:nrun) lvec[j] = lossf(v$Y_churn, phatL[[i]][,j])
+  lossL[[i]]=lvec; names(lossL)[i] = names(phatL)[i]
+}
+lossv = unlist(lossL)
+plot(lossv, ylab="loss on Test", type="n")
+nloss=0
+for(i in 1:nmethod) {
+  ii = nloss + 1:ncol(phatL[[i]])
+  points(ii,lossv[ii],col=i,pch=17)
+  nloss = nloss + ncol(phatL[[i]])
+}
+legend("topright",legend=names(phatL),col=1:nmethod,pch=rep(17,nmethod))
+
+```
+
+```{r}
+
+# Predict on test set and report the performance
+
+
+fit_rf = randomForest(Y_churn~.,data=t,
+                      mtry=1,     #number of variables to sample
+                      ntree=100,  #number of trees to grow
+                      nodesize=10
+)
+
+ofit= as.numeric(predict(fit_rf,newdata=s,type="prob"))
+out_bag_error_rf = sum((as.numeric(s$Y_churn)-ofit)^2)
+out_bag_error_rf= sqrt(out_bag_error_rf/nrow(s))
+print(out_bag_error_rf)
+
+```
+
+
+

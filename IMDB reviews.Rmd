@@ -1,0 +1,283 @@
+---
+output:
+  word_document: default
+  html_document: default
+---
+
+
+
+##########################
+packageNames = c("MASS", "ISLR", "animation", 
+                 "ElemStatLearn", "glmnet", "textir", "nnet", 
+                 "methods", "statmod", "stats", "graphics",
+                 "RCurl", "jsonlite", "tools", "utils",
+                 "data.table", "gbm", "ggplot2", "randomForest",
+                 "tree", "class", "kknn", "e1071",
+                 "data.table", "recommenderlab")
+
+for (pkgName in packageNames){
+  if (!(pkgName %in% rownames(installed.packages()))){
+    install.packages(pkgName,dependencies=TRUE)
+  }
+}
+update.packages(ask=FALSE)
+###############################################
+
+```{r}
+
+
+# Download and pre-process data
+download.file(
+  'https://raw.githubusercontent.com/ChicagoBoothML/ML2016/master/hw02/MovieReview_train.csv',
+  'MovieReview_train.csv')
+
+trainDf = read.csv("MovieReview_train.csv")
+
+download.file(
+  'https://raw.githubusercontent.com/ChicagoBoothML/ML2016/master/hw02/MovieReview_test.csv',
+  'MovieReview_test.csv')
+
+test1Df = read.csv("MovieReview_test.csv")
+
+test1Df$sentiment = as.factor(trainDf$sentiment)
+
+
+
+
+
+
+
+
+```
+
+```{R}
+
+
+# Summary the data
+table(trainDf$sentiment)
+
+table(test1Df$sentiment)
+# 4979 customers default
+
+
+```
+
+```{R}
+##split train in train, test
+n=nrow(trainDf)
+set.seed(99)
+ii = sample(1:n,n)
+ntest = floor(n/2)
+testDf = trainDf[ii[1:ntest],]
+trainDf = trainDf[ii[(ntest+1):n],]
+trainDf$sentiment = as.factor(trainDf$sentiment)
+testDf$sentiment = as.factor(testDf$sentiment)
+
+table(trainDf$sentiment)
+
+table(testDf$sentiment)
+
+```
+
+```{R}
+# Preparing for Modeling
+library(ROCR)
+library(tree)
+library(randomForest)
+library(gbm)
+
+# define loss function
+# deviance loss function
+# y should be 0/1
+# phat are probabilities obtain by our algorithm 
+# wht shrinks probs in phat towards .5 --- this helps avoid numerical problems don't use log(0)!
+lossf = function(y,phat,wht=0.0000001) {
+  if(is.factor(y)) y = as.numeric(y)-1
+  phat = (1-wht)*phat + wht*.5
+  py = ifelse(y==1, phat, 1-phat)
+  return(-2*sum(log(py)))
+}
+
+# deviance loss function
+# y should be 0/1
+# phat are probabilities obtain by our algorithm 
+# thr is the cut off value - everything above thr is classified as 1
+getConfusionMatrix = function(y,phat,thr=0.5) {
+  # some models predict probabilities that the data belongs to class 1,
+  # This function convert probability to 0 - 1 labels
+  if(is.factor(y)) y = as.numeric(y)-1
+  yhat = ifelse(phat > thr, 1, 0)
+  tb = table(predictions = yhat, 
+             actual = y)  
+  rownames(tb) = c("predict_0", "predict_1")
+  return(tb)
+}
+
+
+
+# deviance loss function
+# y should be 0/1
+# phat are probabilities obtain by our algorithm 
+# thr is the cut off value - everything above thr is classified as 1
+lossMR = function(y,phat,thr=0.5) {
+  if(is.factor(y)) y = as.numeric(y)-1
+  yhat = ifelse(phat > thr, 1, 0)
+  return(1 - mean(yhat == y))
+}
+
+
+# initialize a place to store results of multiple models.
+phatL = list()
+phatL.test = list()
+yhatL = list()
+yhatL.best = list()
+LossMR = list()
+
+
+
+
+
+
+```
+
+```{R}
+
+# Logistic Regression
+lgfit = glm(sentiment~., trainDf, family=binomial)
+print(summary(lgfit))
+phat = predict(lgfit, testDf, type="response")
+phatL$logit = matrix(phat,ncol=1) 
+
+```
+
+```{R}
+
+# Random Forest
+set.seed(99)
+# We want to fit several different random forest models with different tuning parameters setting
+# There are two key parameters
+# mtry : number of variables randomly sampled as candidates at each splits
+# ntree : number of trees in the random forest
+##settings for randomForest
+p=ncol(trainDf)-1 # number of variables 
+mtryv = c(p, sqrt(p)) 
+ntreev = c(500,1000) # number of trees
+(setrf = expand.grid(mtryv,ntreev))  # this contains all settings to try
+colnames(setrf)=c("mtry","ntree")
+setrf # a matrix, each row is a parameter setting for random forest
+
+# initialize a place to store fitting results
+phatL$rf = matrix(0.0,nrow(testDf),nrow(setrf))  # we will store results here
+ 
+###fit rf
+for(i in 1:nrow(setrf)) { # loop over all parameter settings
+  #fit and predict
+  frf = randomForest(sentiment~., data=trainDf, 
+                     mtry=setrf[i,1], 
+                     ntree=setrf[i,2], 
+                     nodesize=10)
+  phat = predict(frf, newdata=testDf, type="prob")[,2]
+  phatL$rf[,i]=phat
+}
+
+write.table(as.data.frame(phatL),file="phatL.csv", quote=F,sep=",",row.names=F)
+
+
+```
+
+
+```{R}
+
+# Boosting
+# set variables 
+# There are three key parameters in boosting
+# tdepth : 	The maximum depth of variable interactions
+# ntree : number of trees 
+# shrink : a shrinkage parameter applied to each tree in the expansion
+##settings for boosting
+idv = c(2,4)
+ntv = c(1000,5000)
+shv = c(.1,.01)
+(setboost = expand.grid(idv,ntv,shv))
+colnames(setboost) = c("tdepth","ntree","shrink")
+phatL$boost = matrix(0.0,nrow(testDf),nrow(setboost))
+setboost
+
+
+
+# For boosting, we need to convert y back to numeric variable
+
+trainDfB = trainDf # create a copy of train data, use this copy for boosting
+trainDfB$sentiment = as.numeric(trainDfB$sentiment)-1 # convert factor labels to numeric variable
+testDfB = testDf # create a copy of test data
+testDfB$sentiment = as.numeric(testDfB$sentiment)-1
+
+
+##Fitting
+for(i in 1:nrow(setboost)) {
+  ##fit and predict
+  fboost = gbm(sentiment~., data=trainDfB, distribution="bernoulli",
+               n.trees=setboost[i,2],
+               interaction.depth=setboost[i,1],
+               shrinkage=setboost[i,3])
+  phat = predict(fboost,
+                 newdata=testDfB,
+                 n.trees=setboost[i,2],
+                 type="response")
+  phatL$boost[,i] = phat
+}
+
+
+
+```
+
+```{R}
+
+# Analysis of results
+# Misclassification of Logistic regression on testing set
+getConfusionMatrix(testDf$sentiment, phatL[[1]][,1], 0.5)
+cat('Missclassification rate = ', lossMR(testDf$sentiment, phatL[[1]][,1], 0.5), '\n')
+
+# random forest
+nrun = nrow(setrf)
+for(j in 1:nrun) {
+  print(setrf[j,])
+  print("Confusion Matrix:")
+  print(getConfusionMatrix(testDf$sentiment, phatL[[2]][,j], 0.5))
+  cat('Missclassification rate = ', lossMR(testDf$sentiment, phatL[[2]][,j], 0.5), '\n')
+}
+
+
+
+# boosting
+nrun = nrow(setboost)
+for(j in 1:nrun) {
+  print(setboost[j,])
+  print("Confusion Matrix:")
+  print(getConfusionMatrix(testDf$sentiment, phatL[[3]][,j], 0.5))
+  cat('Missclassification rate = ', lossMR(testDf$sentiment, phatL[[3]][,j], 0.5), '\n')
+}
+
+
+#Find Best Model
+#From each method class, we choose the one that has the lowest MR on the validation set.
+#Manually Input for Test data prediction
+
+
+fboost.best = gbm(sentiment~., data=trainDfB, distribution="bernoulli",
+                  n.trees=5000,
+                  interaction.depth=2,
+                  shrinkage=0.01)
+phatL.best = predict(fboost.best,
+                     newdata=test1DfB,
+                     n.trees=5000,
+                     type="response")
+
+yhatL.best = ifelse(phatL.best > 0.5, 1, 0)
+
+write.table(as.data.frame(yhatL.best),file="yhatL.best.csv", quote=F,sep=",",row.names=F)
+
+
+```
+
+

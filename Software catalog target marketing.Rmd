@@ -1,0 +1,526 @@
+---
+title: "Midterm Q3"
+output:
+  word_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+
+```{R}
+
+library(MASS)
+library(kknn)
+#download.file("https://raw.githubusercontent.com/ChicagoBoothML/HelpR/master/docv.R", "docv.R")
+#source("docv.R") #this has docvknn used below
+#install.packages("rpart.plot")
+#install.packages("caret")
+library(rpart)      # package for trees
+library(rpart.plot) # package that enhances plotting capabilities for rpart
+library(MASS)  # contains boston housing data
+library(ROCR)
+library(tree)
+library(randomForest)
+library(gbm)
+library(caret)
+library(data.table)
+library(doParallel)
+
+# load modules from the common HelpR repo
+#helpr_repo_raw_url <- 'https://raw.githubusercontent.com/ChicagoBoothML/HelpR/master'
+#source(file.path(helpr_repo_raw_url, 'EvaluationMetrics.R'))
+
+# set randomizer's seed
+set.seed(99)   
+
+download.file("https://raw.githubusercontent.com/ChicagoBoothML/HelpR/master/docv_classification.R", destfile = "docv_classification.R")
+
+source("docv_classification.R")
+
+```
+
+
+
+```{r}
+# define loss function
+# deviance loss function
+# y should be 0/1
+# phat are probabilities obtain by our algorithm 
+# wht shrinks probs in phat towards .5 --- this helps avoid numerical problems don't use log(0)!
+lossf = function(y,phat,wht=0.0000001) {
+  if(is.factor(y)) y = as.numeric(y)-1
+  phat = (1-wht)*phat + wht*.5
+  py = ifelse(y==1, phat, 1-phat)
+  return(-2*sum(log(py)))
+}
+
+# deviance loss function
+# y should be 0/1
+# phat are probabilities obtain by our algorithm 
+# thr is the cut off value - everything above thr is classified as 1
+getConfusionMatrix = function(y,phat,thr=0.5) {
+  # some models predict probabilities that the data belongs to class 1,
+  # This function convert probability to 0 - 1 labels
+  if(is.factor(y)) y = as.numeric(y)-1
+  yhat = ifelse(phat > thr, 1, 0)
+  tb = table(predictions = yhat, 
+             actual = y)  
+  rownames(tb) = c("predict_0", "predict_1")
+  return(tb)
+}
+
+
+
+# deviance loss function
+# y should be 0/1
+# phat are probabilities obtain by our algorithm 
+# thr is the cut off value - everything above thr is classified as 1
+lossMR = function(y,phat,thr=0.5) {
+  if(is.factor(y)) y = as.numeric(y)-1
+  yhat = ifelse(phat > thr, 1, 0)
+  return(1 - mean(yhat == y))
+}
+```
+
+Question 1
+```{r}
+###############################################################################
+# Machine learning 2017 Winter 
+# Midtrm 1, question 2
+# Sean Lin
+# seanlin@chicagobooth.edu
+###############################################################################
+# read data
+
+Tayko <- read.csv(file="Tayko.csv",head=TRUE,sep=",")
+
+```
+
+```{r}
+Gross_profit = 0.053*180000*103-2*180000
+Gross_profit
+
+
+```
+
+Question 2
+
+```{R}
+sapply(Tayko, function(col) {
+  if (class(col) == 'factor') {
+    levels(col)
+  } else {
+    paste('[', class(col), ']', sep='')
+  }
+})
+
+sapply(Tayko, function(col) sum(is.na(col)))
+```
+
+```{R}
+#split data
+Tayko$Purchase=as.factor(Tayko$Purchase)
+phatL=list()
+phatL2=list()
+s <- Tayko[Tayko$Partition == "s", ]
+s <- s[,-26]
+s <- s[,-25]
+t <- Tayko[Tayko$Partition == "t", ]
+t <- t[,-26]
+t <- t[,-25]
+v <- Tayko[Tayko$Partition == "v", ]
+v <- v[,-26]
+v <- v[,-25]
+```
+Logistic Regression
+```{R}
+#logistic regression
+lgfit=glm(Purchase~.,t,family=binomial)
+#print(summary(lgfit))
+phat = predict(lgfit, v, type="response")
+phatL$logit = matrix(phat,ncol=1)
+phat = predict(lgfit, s, type="response")
+phatL2$logit = matrix(phat,ncol=1)
+```
+
+Random Forest
+```{r}
+#random forest
+p=ncol(t)-1
+mtryv = c(sqrt(p))
+ntreev = c(100,500)
+nnodesize=c(10,20)
+setrf = expand.grid(mtryv,ntreev,nnodesize) # this contains all settings to try
+colnames(setrf)=c("mtry","ntree",'nodesize')
+phatL$rf = matrix(0.0,nrow(v),nrow(setrf)) # we will store results here
+phatL2$rf = matrix(0.0,nrow(s),nrow(setrf)) # we will store results here
+
+for(i in 1:nrow(setrf)) {
+#fit and predict
+cat('Now i=',i ,'/',nrow(setrf), ', ')
+frf = randomForest(Purchase~., data=t,
+                   mtry=setrf[i,1],
+                   ntree=setrf[i,2],
+                   nodesize=setrf[i,3])
+phat = predict(frf, newdata=v, type="prob")[,2]
+phatL$rf[,i]=phat
+phat = predict(frf, newdata=s, type="prob")[,2]
+phatL2$rf[,i]=phat
+
+
+}
+```
+
+Boosting
+
+```{R}
+#Boosting
+idv = c(2,4)
+ntv = c(500,1000)
+shv = c(.02,.01)
+setboost = expand.grid(idv,ntv,shv)
+colnames(setboost) = c("tdepth","ntree","shrink")
+phatL$boost = matrix(0.0,nrow(v),nrow(setboost))
+phatL2$boost = matrix(0.0,nrow(s),nrow(setboost))
+
+tdB=t;
+tdB$Purchase=as.numeric(tdB$Purchase)-1
+vdB=v;
+vdB$Purchase=as.numeric(vdB$Purchase)-1
+sdB=s;
+sdB$Purchase=as.numeric(sdB$Purchase)-1
+
+for(i in 1:nrow(setboost)) {
+##fit and predict
+cat('Now i=',i ,'/',nrow(setboost), ', ')
+fboost = gbm(Purchase~., data=tdB, distribution="bernoulli",
+             n.trees=setboost[i,2],
+             interaction.depth=setboost[i,1],
+             shrinkage=setboost[i,3])
+phat = predict(fboost,
+               newdata=vdB,
+               n.trees=setboost[i,2],
+               type="response")
+phatL$boost[,i] = phat
+
+phat = predict(fboost,
+               newdata=sdB,
+               n.trees=setboost[i,2],
+               type="response")
+phatL2$boost[,i] = phat
+
+}
+```
+
+```{R}
+# Loss on validation set
+lossL = list()
+nmethod = length(phatL)
+for(i in 1:nmethod) {
+  nrun = ncol(phatL[[i]])
+  lvec = rep(0,nrun)
+  for(j in 1:nrun) lvec[j] = lossf(v$Purchase, phatL[[i]][,j])
+  lossL[[i]]=lvec; names(lossL)[i] = names(phatL)[i]
+}
+lossv = unlist(lossL)
+plot(lossv, ylab="loss on Test", type="n")
+nloss=0
+for(i in 1:nmethod) {
+  ii = nloss + 1:ncol(phatL[[i]])
+  points(ii,lossv[ii],col=i,pch=17)
+  nloss = nloss + ncol(phatL[[i]])
+}
+legend("topright",legend=names(phatL),col=1:nmethod,pch=rep(17,nmethod))
+
+```
+```{R}
+# Analysis of results
+# Misclassification of Logistic regression on validation set
+getConfusionMatrix(v$Purchase, phatL[[1]][,1], 0.5)
+cat('Missclassification rate = ', lossMR(v$Purchase, phatL[[1]][,1], 0.5), '\n')
+
+
+# random forest
+nrun = nrow(setrf)
+for(j in 1:nrun) {
+  print(setrf[j,])
+  print("Confusion Matrix:")
+  print(getConfusionMatrix(v$Purchase, phatL[[2]][,j], 0.5))
+  cat('Missclassification rate = ', lossMR(v$Purchase, phatL[[2]][,j], 0.5), '\n')
+}
+
+
+# boosting
+nrun = nrow(setboost)
+for(j in 1:nrun) {
+  print(setboost[j,])
+  print("Confusion Matrix:")
+  print(getConfusionMatrix(v$Purchase, phatL[[3]][,j], 0.5))
+  cat('Missclassification rate = ', lossMR(v$Purchase, phatL[[3]][,j], 0.5), '\n')
+}
+```
+
+```{R}
+#From each method class, we choose the one that has the lowest error on the validation set.
+nmethod = length(phatL)
+phatBest = matrix(0.0,nrow(v),nmethod) #pick off best from each method
+colnames(phatBest) = names(phatL)
+for(i in 1:nmethod) {
+  nrun = ncol(phatL[[i]])
+  lvec = rep(0,nrun)
+  for(j in 1:nrun) lvec[j] = lossf(v$y,phatL[[i]][,j])
+  imin = which.min(lvec)
+  phatBest[,i] = phatL[[i]][,imin]
+  phatBest[,i] = phatL[[i]][,1]
+}
+```
+
+```{R}
+colnames(phatBest) = c("logit", "rf", "boost")
+tempdf = data.frame(phatBest,y = v$Purchase)
+par(mfrow=c(1,3))
+plot(logit~y,tempdf,ylim=c(0,1),cex.lab=1.4,col=c("red","blue"))
+plot(rf~y,tempdf,ylim=c(0,1),cex.lab=1.4,col=c("red","blue"))
+plot(boost~y,tempdf,ylim=c(0,1),cex.lab=1.4,col=c("red","blue"))
+```
+Question 3
+
+```{R}
+
+
+i=3
+lvec=lossL[[i]]
+imin = which.min(lvec)
+phatBest = phatL2[[i]][,imin]
+
+plot(c(0,1),c(0,1),xlab='FPR',ylab='TPR',main="ROC curve",cex.lab=1,type="n")
+pred = prediction(phatBest, s$Purchase)
+perf = performance(pred, measure = "tpr", x.measure = "fpr")
+lines(perf@x.values[[1]], perf@y.values[[1]],col=i)
+
+abline(0,1,lty=2)
+legend("topleft",legend=names(phatL),col=1:nmethod,lty=rep(1,nmethod))
+```
+Question 4
+
+
+```{R}
+
+Tayko <- read.csv(file="Tayko.csv",head=TRUE,sep=",")
+
+
+#Convert data types
+Tayko$US <- as.factor(Tayko$US)
+#Tayko$Freq <- as.factor(Tayko$Freq)
+#Tayko$last_update_days_ago <- as.factor(Tayko$last_update_days_ago)
+#Tayko$first_update_days_ago <- as.factor(Tayko$first_update_days_ago)
+Tayko$Web_order <- as.factor(Tayko$Web_order)
+Tayko$Gender_is_male <- as.factor(Tayko$Gender_is_male)
+Tayko$Address_is_res <- as.factor(Tayko$Address_is_res)
+Tayko$source_a <- as.factor(Tayko$source_a)
+Tayko$source_b <- as.factor(Tayko$source_b)
+Tayko$source_c <- as.factor(Tayko$source_c)
+Tayko$source_d <- as.factor(Tayko$source_d)
+Tayko$source_e <- as.factor(Tayko$source_e)
+Tayko$source_f <- as.factor(Tayko$source_m)
+Tayko$source_g <- as.factor(Tayko$source_o)
+Tayko$source_h <- as.factor(Tayko$source_h)
+Tayko$source_r <- as.factor(Tayko$source_r)
+Tayko$source_s <- as.factor(Tayko$source_s)
+Tayko$source_t <- as.factor(Tayko$source_t)
+Tayko$source_u <- as.factor(Tayko$source_u)
+Tayko$source_p <- as.factor(Tayko$source_p)
+Tayko$source_x <- as.factor(Tayko$source_x)
+Tayko$source_w <- as.factor(Tayko$source_w)
+
+```
+
+```{R}
+
+phatL=list()
+phatL2=list()
+
+#split data
+Tayko_Purchase <- Tayko[Tayko$Purchase == "1", ]
+s <- Tayko_Purchase[Tayko_Purchase$Partition == "s", ]
+s <- s[,-26]
+s <- s[,-24]
+s <- s[,-1]
+t <- Tayko_Purchase[Tayko_Purchase$Partition == "t", ]
+t <- t[,-26]
+t <- t[,-24]
+t <- t[,-1]
+v <- Tayko_Purchase[Tayko_Purchase$Partition == "v", ]
+v <- v[,-26]
+v <- v[,-24]
+v <- v[,-1]
+```
+
+A Single Tree
+
+```{R}
+
+big.tree = rpart(Spending~.,method="anova",t,control=rpart.control(minsplit=5,cp=.0001))
+nbig = length(unique(big.tree$where))
+
+cpvec = big.tree$cptable[,"CP"]
+ntree = length(cpvec)
+in_bag_error = rep(0,ntree)
+out_bag_error = rep(0,ntree)
+tree_size = rep(0,ntree)
+
+
+for(i in 1:ntree) {
+  temptree = prune(big.tree,cp=cpvec[i])
+  tree_size[i] = length(unique(temptree$where))
+  in_bag_error[i] = sum((t$Spending-round(predict(temptree)))^2)
+  ofit =round(predict(temptree,v))
+  out_bag_error[i] = sum((v$Spending-ofit)^2)
+}
+out_bag_error=sqrt(out_bag_error/nrow(v))
+in_bag_error = sqrt(in_bag_error/nrow(t))
+#plot losses
+rgl = range(c(in_bag_error,out_bag_error))
+plot(tree_size, in_bag_error, type = "l", col = "red", lwd = 3, ylab = "RMSE")
+lines(tree_size, out_bag_error, col = "blue", lwd = 3)
+legend("topright",legend=c("in-sample","out-of-sample"),lwd=3,col=c("red","blue"))
+
+min(out_bag_error)
+
+```
+
+
+```{R}
+tree_depth = c(5, 10, 15, 20)
+tree_num = c(1000, 2000, 5000)
+lambda=c(.001, 0.01, 0.1)
+Boosting_params = expand.grid(tree_depth,tree_num,lambda)
+num_params = nrow(Boosting_params)
+out_bag_error = rep(0,num_params)
+in_bag_error = rep(0,num_params)
+results = vector("list",num_params)
+for(i in 1:num_params) {
+  boost_fit =gbm(Spending~.,data=t,distribution="gaussian",
+                 interaction.depth=Boosting_params[i,1],n.trees=Boosting_params[i,2],shrinkage=Boosting_params[i,3])
+  pred_in_bag =round(predict(boost_fit,n.trees=Boosting_params[i,2]))
+  pred_out_bag=round(predict(boost_fit,newdata=v,n.trees=Boosting_params[i,2]))
+  out_bag_error[i] = sum((v$Spending-pred_out_bag)^2)
+  in_bag_error[i] = sum((t$Spending-pred_in_bag)^2)
+  results[[i]]=boost_fit
+ }
+in_bag_error = round(sqrt(in_bag_error/nrow(t)),3)
+out_bag_error = round(sqrt(out_bag_error/nrow(v)),3)
+print(cbind(Boosting_params,out_bag_error,in_bag_error))
+
+min(out_bag_error)
+Boosting_params[which.min(out_bag_error),]
+
+```
+
+Random Forest
+
+```{R}
+
+p=ncol(t)-1
+mtry_vec = 5:13
+tree_num = c(100,200,500)
+RF_params = expand.grid(mtry_vec,tree_num)
+colnames(RF_params)=c("mtry","ntree")
+num_params_2 = nrow(RF_params)
+out_bag_error_rf = rep(0,num_params_2)
+in_bag_error_rf = rep(0,num_params_2)
+results = vector("list",num_params_2)
+for(i in 1:num_params_2) {
+  fit_rf = randomForest(Spending~.,data=t,
+                        mtry=RF_params[i,1],
+                        ntree=RF_params[i,2]
+                        )
+  ifit = round(predict(fit_rf))
+  ofit= round(predict(fit_rf,newdata=v))
+  out_bag_error_rf[i] = sum((v$Spending-ofit)^2)
+  in_bag_error_rf[i] = sum((t$Spending-ifit)^2)
+  results[[i]]=fit_rf
+}
+in_bag_error_rf = round(sqrt(in_bag_error_rf/nrow(t)),3) 
+out_bag_error_rf= round(sqrt(out_bag_error_rf/nrow(v)),3)
+#print losses
+print(cbind(RF_params,out_bag_error_rf,in_bag_error_rf))
+
+min(out_bag_error_rf)
+RF_params[which.min(out_bag_error_rf),]
+best_rf = results[[which.min(out_bag_error_rf)]]
+
+```
+Question 5
+
+```{R}
+Tayko <- read.csv(file="Tayko.csv",head=TRUE,sep=",")
+
+#Convert data types
+Tayko$US <- as.factor(Tayko$US)
+#Tayko$Freq <- as.factor(Tayko$Freq)
+#Tayko$last_update_days_ago <- as.factor(Tayko$last_update_days_ago)
+#Tayko$first_update_days_ago <- as.factor(Tayko$first_update_days_ago)
+Tayko$Web_order <- as.factor(Tayko$Web_order)
+Tayko$Gender_is_male <- as.factor(Tayko$Gender_is_male)
+Tayko$Address_is_res <- as.factor(Tayko$Address_is_res)
+Tayko$source_a <- as.factor(Tayko$source_a)
+Tayko$source_b <- as.factor(Tayko$source_b)
+Tayko$source_c <- as.factor(Tayko$source_c)
+Tayko$source_d <- as.factor(Tayko$source_d)
+Tayko$source_e <- as.factor(Tayko$source_e)
+Tayko$source_f <- as.factor(Tayko$source_m)
+Tayko$source_g <- as.factor(Tayko$source_o)
+Tayko$source_h <- as.factor(Tayko$source_h)
+Tayko$source_r <- as.factor(Tayko$source_r)
+Tayko$source_s <- as.factor(Tayko$source_s)
+Tayko$source_t <- as.factor(Tayko$source_t)
+Tayko$source_u <- as.factor(Tayko$source_u)
+Tayko$source_p <- as.factor(Tayko$source_p)
+Tayko$source_x <- as.factor(Tayko$source_x)
+Tayko$source_w <- as.factor(Tayko$source_w)
+
+s <- Tayko[Tayko$Partition == "s", ]
+actual_spending <-s[,25]
+
+s <- s[,-26]
+s <- s[,-25]
+s <- s[,-1]
+
+
+s$pred_purchase = phatBest
+fit_rf = randomForest(Spending~.,data=t,
+                        mtry=11,
+                        ntree=100
+                        )
+s$pred_spending= round(predict(fit_rf,newdata=s))
+s$expected_spending = s$pred_spending*s$pred_purchase*0.017
+s$actual_spending = actual_spending
+
+s= s[order(-s$expected_spending),]
+s$average_spending = sum(s$actual_spending)/nrow(s)
+source("createBins.R")
+s$score=createBins(s$expected_spending,10)
+s$one= 1
+s$cum_mailed=100*cumsum(s$one)/sum(s$one)
+s$cum_actual_spending=cumsum(s$actual_spending)
+s$cum_n_mailed=cumsum(s$one)
+s$cum_average_spending=cumsum(s$average_spending)
+s$lift=s$cum_actual_spending/s$cum_average_spending
+
+plot(s$cum_mailed, s$lift, type ="l", col="red", lwd=3,xlim=c(0,100), xlab="Percent Mailed", ylab ="Lift")
+lines(x=c(0,100), y=c(1,1),col="blue")
+legend("topright",legend=c("target","random"),lwd=3,col=c("red","blue"))
+
+```
+
+

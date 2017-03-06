@@ -1,0 +1,1634 @@
+---
+title: "Midterm Q2"
+output:
+  word_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{R}
+library(MASS)
+library(kknn)
+#download.file("https://raw.githubusercontent.com/ChicagoBoothML/HelpR/master/docv.R", "docv.R")
+source("docv.R") #this has docvknn used below
+#install.packages("rpart.plot")
+library(rpart)      # package for trees
+library(rpart.plot) # package that enhances plotting capabilities for rpart
+library(MASS)  # contains boston housing data
+library(ROCR)
+library(tree)
+library(randomForest)
+library(gbm)
+
+#download.file("https://raw.githubusercontent.com/ChicagoBoothML/HelpR/master/docv_classification.R", destfile = "docv_classification.R")
+
+source("docv_classification.R")
+
+```
+
+```{R}
+# deviance loss function
+# y should be 0/1
+# phat are probabilities obtain by our algorithm 
+# thr is the cut off value - everything above thr is classified as 1
+
+
+
+misclassification=function(y,yhat) {return(sum(abs(as.numeric(y)-as.numeric(yhat))) / length(y))}
+doknn=function(x,y,xp,k) {
+  kdo=k[1]
+  train = data.frame(x,y=y)
+  test = data.frame(xp); names(test) = names(train)[1:(ncol(train)-1)]
+  near  = kknn(y~.,train,test,k=kdo,kernel='rectangular')
+  return(near$fitted)
+}
+```
+
+Question 1 
+```{r}
+###############################################################################
+# Machine learning 2017 Winter 
+# Midtrm 1, question 2
+# Sean Lin
+# seanlin@chicagobooth.edu
+###############################################################################
+# read data
+
+PhillyCrime <- read.csv(file="PhillyCrime.csv",head=TRUE,sep=",")
+
+```
+
+1. Make two separate scatterplots of the crime incidents using their latitudes (X) and longitudes (Y), one for Vandalism and one for Thefts. Describe any pattern or difference you find from the scatterplots.
+(You might want to decrease the size of the points so that they don't overlap too much.)
+
+```{R}
+#split data
+
+v <- PhillyCrime[PhillyCrime$Category == "Vandalism", ]
+t <- PhillyCrime[PhillyCrime$Category == "Thefts", ]
+
+
+#transform Category to numeric variable where 1 = Vandalism 0 = Theft and combine data sets
+
+t$crime_cat = 0
+v$crime_cat = 1
+PhillyCrime <- rbind(t, v)
+
+#Draw scatterplots for Vandalism and Thefts
+
+par(mfrow=c(1,2))
+plot(v$X, v$Y, main = "Vandalism", xlab = "Latitude", ylab = "Longitude", cex = 0.25)
+plot(t$X, t$Y, main = "Thefts", xlab = "Latitude", ylab = "Longitude", cex = 0.25)
+
+```
+Question 2
+```{R}
+#Divide into 50% training and 50% test test
+set.seed(100)
+
+N = dim(PhillyCrime)[1]
+train_index = sample(N, size = N * 0.5, replace = FALSE)
+test = PhillyCrime[train_index,] #training_data
+train = PhillyCrime[-train_index, ]#validation_data
+
+
+#sort training set by latitude (x) and longitudes (y) and put in 1 matrix
+
+train <- train[order(train$X, train$Y) ,]
+test <- test[order(test$X, test$Y) ,]
+
+
+```
+
+```{r}
+#Define k vector and create misclassifcation matrix
+
+k_vec = 1:100
+MR = rep(0,100) #return values
+MR_2 = expand.grid(k_vec,MR)
+colnames(MR_2) = c("K", "MR")
+
+for(i in 1:100)
+{
+  
+  kdo = k_vec[i]
+  near <- kknn(crime_cat~X+Y, train=train, test=test, k=kdo, kernel = "rectangular")
+  MR[i] = misclassification(test$crime_cat, near$fitted.values)
+  MR_2[i, 2] = misclassification(test$crime_cat, near$fitted.values)
+
+}
+```
+
+
+Q2-a
+
+```{R}
+MR_sub <- subset(MR_2, MR > 0)
+plot(MR_sub)
+```
+Q2-b,c
+
+
+```{R}
+
+kbest = k_vec[which.min(MR)]
+kbest
+min(MR)
+nearbest <- kknn(crime_cat~X+Y, train=train, test=test, k=kbest, kernel = "rectangular")
+test$crime_cat_predict = nearbest$fitted.values 
+
+plot(test$X, test$Y, col=c("red","blue")[as.factor(test$crime_cat_predict)],main = "Crime Predict", xlab = "Latitude", ylab = "Longitude",cex=0.25)
+legend("topright",legend=c("Thefts","Vandalism"),lwd=1,col=c("red","blue"))
+
+
+```
+Question 3
+
+```{R}
+Q3 = matrix(nrow=20, ncol=2)
+
+
+colnames(Q3) = c("K", "MR")
+```
+
+```{R}
+PhillyCrime <- read.csv(file="PhillyCrime.csv",head=TRUE,sep=",")
+
+#split data
+
+v <- PhillyCrime[PhillyCrime$Category == "Vandalism", ]
+t <- PhillyCrime[PhillyCrime$Category == "Thefts", ]
+
+
+#transform Category to numeric variable where 1 = Vandalism 0 = Theft and combine data sets
+
+t$crime_cat = 0
+v$crime_cat = 1
+PhillyCrime <- rbind(t, v)
+
+#Divide into 50% training and 50% test test
+set.seed(100)
+```
+
+Q3-a
+```{r}
+#split 1
+N = dim(PhillyCrime)[1]
+train_index = sample(N, size = N * 0.5, replace = FALSE)
+test = PhillyCrime[train_index,] #training_data
+train = PhillyCrime[-train_index, ]#validation_data
+
+
+#sort training set by latitude (x) and longitudes (y) and put in 1 matrix
+
+train <- train[order(train$X, train$Y) ,]
+test <- test[order(test$X, test$Y) ,]
+
+#Define k vector and create misclassifcation matrix
+
+k_vec = 1:100
+MR = rep(0,100) #return values
+MR_2 = expand.grid(k_vec,MR)
+colnames(MR_2) = c("K", "MR")
+
+for(i in 1:100)
+{
+  
+  kdo = k_vec[i]
+  near <- kknn(crime_cat~X+Y, train=train, test=test, k=kdo, kernel = "rectangular")
+  MR[i] = misclassification(test$crime_cat, near$fitted.values)
+  MR_2[i, 2] = misclassification(test$crime_cat, near$fitted.values)
+
+}
+
+Q3[1,1] = k_vec[which.min(MR)]
+Q3[1,2] = min(MR)
+
+
+
+
+#split 2
+N = dim(PhillyCrime)[1]
+train_index = sample(N, size = N * 0.5, replace = FALSE)
+test = PhillyCrime[train_index,] #training_data
+train = PhillyCrime[-train_index, ]#validation_data
+
+
+#sort training set by latitude (x) and longitudes (y) and put in 1 matrix
+
+train <- train[order(train$X, train$Y) ,]
+test <- test[order(test$X, test$Y) ,]
+
+#Define k vector and create misclassifcation matrix
+
+k_vec = 1:100
+MR = rep(0,100) #return values
+MR_2 = expand.grid(k_vec,MR)
+colnames(MR_2) = c("K", "MR")
+
+for(i in 1:100)
+{
+  
+  kdo = k_vec[i]
+  near <- kknn(crime_cat~X+Y, train=train, test=test, k=kdo, kernel = "rectangular")
+  MR[i] = misclassification(test$crime_cat, near$fitted.values)
+  MR_2[i, 2] = misclassification(test$crime_cat, near$fitted.values)
+
+}
+
+Q3[2,1] = k_vec[which.min(MR)]
+Q3[2,2] = min(MR)
+
+
+
+#split 3
+N = dim(PhillyCrime)[1]
+train_index = sample(N, size = N * 0.5, replace = FALSE)
+test = PhillyCrime[train_index,] #training_data
+train = PhillyCrime[-train_index, ]#validation_data
+
+
+#sort training set by latitude (x) and longitudes (y) and put in 1 matrix
+
+train <- train[order(train$X, train$Y) ,]
+test <- test[order(test$X, test$Y) ,]
+
+#Define k vector and create misclassifcation matrix
+
+k_vec = 1:100
+MR = rep(0,100) #return values
+MR_2 = expand.grid(k_vec,MR)
+colnames(MR_2) = c("K", "MR")
+
+for(i in 1:100)
+{
+  
+  kdo = k_vec[i]
+  near <- kknn(crime_cat~X+Y, train=train, test=test, k=kdo, kernel = "rectangular")
+  MR[i] = misclassification(test$crime_cat, near$fitted.values)
+  MR_2[i, 2] = misclassification(test$crime_cat, near$fitted.values)
+
+}
+
+Q3[3,1] = k_vec[which.min(MR)]
+Q3[3,2] = min(MR)
+
+#split 4
+N = dim(PhillyCrime)[1]
+train_index = sample(N, size = N * 0.5, replace = FALSE)
+test = PhillyCrime[train_index,] #training_data
+train = PhillyCrime[-train_index, ]#validation_data
+
+
+#sort training set by latitude (x) and longitudes (y) and put in 1 matrix
+
+train <- train[order(train$X, train$Y) ,]
+test <- test[order(test$X, test$Y) ,]
+
+#Define k vector and create misclassifcation matrix
+
+k_vec = 1:100
+MR = rep(0,100) #return values
+MR_2 = expand.grid(k_vec,MR)
+colnames(MR_2) = c("K", "MR")
+
+for(i in 1:100)
+{
+  
+  kdo = k_vec[i]
+  near <- kknn(crime_cat~X+Y, train=train, test=test, k=kdo, kernel = "rectangular")
+  MR[i] = misclassification(test$crime_cat, near$fitted.values)
+  MR_2[i, 2] = misclassification(test$crime_cat, near$fitted.values)
+
+}
+
+Q3[4,1] = k_vec[which.min(MR)]
+Q3[4,2] = min(MR)
+
+
+
+#split 5
+N = dim(PhillyCrime)[1]
+train_index = sample(N, size = N * 0.5, replace = FALSE)
+test = PhillyCrime[train_index,] #training_data
+train = PhillyCrime[-train_index, ]#validation_data
+
+
+#sort training set by latitude (x) and longitudes (y) and put in 1 matrix
+
+train <- train[order(train$X, train$Y) ,]
+test <- test[order(test$X, test$Y) ,]
+
+#Define k vector and create misclassifcation matrix
+
+k_vec = 1:100
+MR = rep(0,100) #return values
+MR_2 = expand.grid(k_vec,MR)
+colnames(MR_2) = c("K", "MR")
+
+for(i in 1:100)
+{
+  
+  kdo = k_vec[i]
+  near <- kknn(crime_cat~X+Y, train=train, test=test, k=kdo, kernel = "rectangular")
+  MR[i] = misclassification(test$crime_cat, near$fitted.values)
+  MR_2[i, 2] = misclassification(test$crime_cat, near$fitted.values)
+
+}
+
+Q3[5,1] = k_vec[which.min(MR)]
+Q3[5,2] = min(MR)
+
+
+
+#split 6
+N = dim(PhillyCrime)[1]
+train_index = sample(N, size = N * 0.5, replace = FALSE)
+test = PhillyCrime[train_index,] #training_data
+train = PhillyCrime[-train_index, ]#validation_data
+
+
+#sort training set by latitude (x) and longitudes (y) and put in 1 matrix
+
+train <- train[order(train$X, train$Y) ,]
+test <- test[order(test$X, test$Y) ,]
+
+#Define k vector and create misclassifcation matrix
+
+k_vec = 1:100
+MR = rep(0,100) #return values
+MR_2 = expand.grid(k_vec,MR)
+colnames(MR_2) = c("K", "MR")
+
+for(i in 1:100)
+{
+  
+  kdo = k_vec[i]
+  near <- kknn(crime_cat~X+Y, train=train, test=test, k=kdo, kernel = "rectangular")
+  MR[i] = misclassification(test$crime_cat, near$fitted.values)
+  MR_2[i, 2] = misclassification(test$crime_cat, near$fitted.values)
+
+}
+
+Q3[6,1] = k_vec[which.min(MR)]
+Q3[6,2] = min(MR)
+
+
+
+#split 7
+N = dim(PhillyCrime)[1]
+train_index = sample(N, size = N * 0.5, replace = FALSE)
+test = PhillyCrime[train_index,] #training_data
+train = PhillyCrime[-train_index, ]#validation_data
+
+
+#sort training set by latitude (x) and longitudes (y) and put in 1 matrix
+
+train <- train[order(train$X, train$Y) ,]
+test <- test[order(test$X, test$Y) ,]
+
+#Define k vector and create misclassifcation matrix
+
+k_vec = 1:100
+MR = rep(0,100) #return values
+MR_2 = expand.grid(k_vec,MR)
+colnames(MR_2) = c("K", "MR")
+
+for(i in 1:100)
+{
+  
+  kdo = k_vec[i]
+  near <- kknn(crime_cat~X+Y, train=train, test=test, k=kdo, kernel = "rectangular")
+  MR[i] = misclassification(test$crime_cat, near$fitted.values)
+  MR_2[i, 2] = misclassification(test$crime_cat, near$fitted.values)
+
+}
+
+Q3[7,1] = k_vec[which.min(MR)]
+Q3[7,2] = min(MR)
+
+
+
+#split 8
+N = dim(PhillyCrime)[1]
+train_index = sample(N, size = N * 0.5, replace = FALSE)
+test = PhillyCrime[train_index,] #training_data
+train = PhillyCrime[-train_index, ]#validation_data
+
+
+#sort training set by latitude (x) and longitudes (y) and put in 1 matrix
+
+train <- train[order(train$X, train$Y) ,]
+test <- test[order(test$X, test$Y) ,]
+
+#Define k vector and create misclassifcation matrix
+
+k_vec = 1:100
+MR = rep(0,100) #return values
+MR_2 = expand.grid(k_vec,MR)
+colnames(MR_2) = c("K", "MR")
+
+for(i in 1:100)
+{
+  
+  kdo = k_vec[i]
+  near <- kknn(crime_cat~X+Y, train=train, test=test, k=kdo, kernel = "rectangular")
+  MR[i] = misclassification(test$crime_cat, near$fitted.values)
+  MR_2[i, 2] = misclassification(test$crime_cat, near$fitted.values)
+
+}
+
+Q3[8,1] = k_vec[which.min(MR)]
+Q3[8,2] = min(MR)
+
+
+
+#split 9
+N = dim(PhillyCrime)[1]
+train_index = sample(N, size = N * 0.5, replace = FALSE)
+test = PhillyCrime[train_index,] #training_data
+train = PhillyCrime[-train_index, ]#validation_data
+
+
+#sort training set by latitude (x) and longitudes (y) and put in 1 matrix
+
+train <- train[order(train$X, train$Y) ,]
+test <- test[order(test$X, test$Y) ,]
+
+#Define k vector and create misclassifcation matrix
+
+k_vec = 1:100
+MR = rep(0,100) #return values
+MR_2 = expand.grid(k_vec,MR)
+colnames(MR_2) = c("K", "MR")
+
+for(i in 1:100)
+{
+  
+  kdo = k_vec[i]
+  near <- kknn(crime_cat~X+Y, train=train, test=test, k=kdo, kernel = "rectangular")
+  MR[i] = misclassification(test$crime_cat, near$fitted.values)
+  MR_2[i, 2] = misclassification(test$crime_cat, near$fitted.values)
+
+}
+
+Q3[9,1] = k_vec[which.min(MR)]
+Q3[9,2] = min(MR)
+
+
+
+#split 10
+N = dim(PhillyCrime)[1]
+train_index = sample(N, size = N * 0.5, replace = FALSE)
+test = PhillyCrime[train_index,] #training_data
+train = PhillyCrime[-train_index, ]#validation_data
+
+
+#sort training set by latitude (x) and longitudes (y) and put in 1 matrix
+
+train <- train[order(train$X, train$Y) ,]
+test <- test[order(test$X, test$Y) ,]
+
+#Define k vector and create misclassifcation matrix
+
+k_vec = 1:100
+MR = rep(0,100) #return values
+MR_2 = expand.grid(k_vec,MR)
+colnames(MR_2) = c("K", "MR")
+
+for(i in 1:100)
+{
+  
+  kdo = k_vec[i]
+  near <- kknn(crime_cat~X+Y, train=train, test=test, k=kdo, kernel = "rectangular")
+  MR[i] = misclassification(test$crime_cat, near$fitted.values)
+  MR_2[i, 2] = misclassification(test$crime_cat, near$fitted.values)
+
+}
+
+Q3[10,1] = k_vec[which.min(MR)]
+Q3[10,2] = min(MR)
+
+
+
+#split 11
+N = dim(PhillyCrime)[1]
+train_index = sample(N, size = N * 0.5, replace = FALSE)
+test = PhillyCrime[train_index,] #training_data
+train = PhillyCrime[-train_index, ]#validation_data
+
+
+#sort training set by latitude (x) and longitudes (y) and put in 1 matrix
+
+train <- train[order(train$X, train$Y) ,]
+test <- test[order(test$X, test$Y) ,]
+
+#Define k vector and create misclassifcation matrix
+
+k_vec = 1:100
+MR = rep(0,100) #return values
+MR_2 = expand.grid(k_vec,MR)
+colnames(MR_2) = c("K", "MR")
+
+for(i in 1:100)
+{
+  
+  kdo = k_vec[i]
+  near <- kknn(crime_cat~X+Y, train=train, test=test, k=kdo, kernel = "rectangular")
+  MR[i] = misclassification(test$crime_cat, near$fitted.values)
+  MR_2[i, 2] = misclassification(test$crime_cat, near$fitted.values)
+
+}
+
+Q3[11,1] = k_vec[which.min(MR)]
+Q3[11,2] = min(MR)
+
+
+#split 12
+N = dim(PhillyCrime)[1]
+train_index = sample(N, size = N * 0.5, replace = FALSE)
+test = PhillyCrime[train_index,] #training_data
+train = PhillyCrime[-train_index, ]#validation_data
+
+
+#sort training set by latitude (x) and longitudes (y) and put in 1 matrix
+
+train <- train[order(train$X, train$Y) ,]
+test <- test[order(test$X, test$Y) ,]
+
+#Define k vector and create misclassifcation matrix
+
+k_vec = 1:100
+MR = rep(0,100) #return values
+MR_2 = expand.grid(k_vec,MR)
+colnames(MR_2) = c("K", "MR")
+
+for(i in 1:100)
+{
+  
+  kdo = k_vec[i]
+  near <- kknn(crime_cat~X+Y, train=train, test=test, k=kdo, kernel = "rectangular")
+  MR[i] = misclassification(test$crime_cat, near$fitted.values)
+  MR_2[i, 2] = misclassification(test$crime_cat, near$fitted.values)
+
+}
+
+Q3[12,1] = k_vec[which.min(MR)]
+Q3[12,2] = min(MR)
+
+
+
+#split 13
+N = dim(PhillyCrime)[1]
+train_index = sample(N, size = N * 0.5, replace = FALSE)
+test = PhillyCrime[train_index,] #training_data
+train = PhillyCrime[-train_index, ]#validation_data
+
+
+#sort training set by latitude (x) and longitudes (y) and put in 1 matrix
+
+train <- train[order(train$X, train$Y) ,]
+test <- test[order(test$X, test$Y) ,]
+
+#Define k vector and create misclassifcation matrix
+
+k_vec = 1:100
+MR = rep(0,100) #return values
+MR_2 = expand.grid(k_vec,MR)
+colnames(MR_2) = c("K", "MR")
+
+for(i in 1:100)
+{
+  
+  kdo = k_vec[i]
+  near <- kknn(crime_cat~X+Y, train=train, test=test, k=kdo, kernel = "rectangular")
+  MR[i] = misclassification(test$crime_cat, near$fitted.values)
+  MR_2[i, 2] = misclassification(test$crime_cat, near$fitted.values)
+
+}
+
+Q3[13,1] = k_vec[which.min(MR)]
+Q3[13,2] = min(MR)
+
+
+
+#split 14
+N = dim(PhillyCrime)[1]
+train_index = sample(N, size = N * 0.5, replace = FALSE)
+test = PhillyCrime[train_index,] #training_data
+train = PhillyCrime[-train_index, ]#validation_data
+
+
+#sort training set by latitude (x) and longitudes (y) and put in 1 matrix
+
+train <- train[order(train$X, train$Y) ,]
+test <- test[order(test$X, test$Y) ,]
+
+#Define k vector and create misclassifcation matrix
+
+k_vec = 1:100
+MR = rep(0,100) #return values
+MR_2 = expand.grid(k_vec,MR)
+colnames(MR_2) = c("K", "MR")
+
+for(i in 1:100)
+{
+  
+  kdo = k_vec[i]
+  near <- kknn(crime_cat~X+Y, train=train, test=test, k=kdo, kernel = "rectangular")
+  MR[i] = misclassification(test$crime_cat, near$fitted.values)
+  MR_2[i, 2] = misclassification(test$crime_cat, near$fitted.values)
+
+}
+
+Q3[14,1] = k_vec[which.min(MR)]
+Q3[14,2] = min(MR)
+
+
+
+#split 15
+N = dim(PhillyCrime)[1]
+train_index = sample(N, size = N * 0.5, replace = FALSE)
+test = PhillyCrime[train_index,] #training_data
+train = PhillyCrime[-train_index, ]#validation_data
+
+
+#sort training set by latitude (x) and longitudes (y) and put in 1 matrix
+
+train <- train[order(train$X, train$Y) ,]
+test <- test[order(test$X, test$Y) ,]
+
+#Define k vector and create misclassifcation matrix
+
+k_vec = 1:100
+MR = rep(0,100) #return values
+MR_2 = expand.grid(k_vec,MR)
+colnames(MR_2) = c("K", "MR")
+
+for(i in 1:100)
+{
+  
+  kdo = k_vec[i]
+  near <- kknn(crime_cat~X+Y, train=train, test=test, k=kdo, kernel = "rectangular")
+  MR[i] = misclassification(test$crime_cat, near$fitted.values)
+  MR_2[i, 2] = misclassification(test$crime_cat, near$fitted.values)
+
+}
+
+Q3[15,1] = k_vec[which.min(MR)]
+Q3[15,2] = min(MR)
+
+
+
+#split 16
+N = dim(PhillyCrime)[1]
+train_index = sample(N, size = N * 0.5, replace = FALSE)
+test = PhillyCrime[train_index,] #training_data
+train = PhillyCrime[-train_index, ]#validation_data
+
+
+#sort training set by latitude (x) and longitudes (y) and put in 1 matrix
+
+train <- train[order(train$X, train$Y) ,]
+test <- test[order(test$X, test$Y) ,]
+
+#Define k vector and create misclassifcation matrix
+
+k_vec = 1:100
+MR = rep(0,100) #return values
+MR_2 = expand.grid(k_vec,MR)
+colnames(MR_2) = c("K", "MR")
+
+for(i in 1:100)
+{
+  
+  kdo = k_vec[i]
+  near <- kknn(crime_cat~X+Y, train=train, test=test, k=kdo, kernel = "rectangular")
+  MR[i] = misclassification(test$crime_cat, near$fitted.values)
+  MR_2[i, 2] = misclassification(test$crime_cat, near$fitted.values)
+
+}
+
+Q3[16,1] = k_vec[which.min(MR)]
+Q3[16,2] = min(MR)
+
+
+
+#split 17
+N = dim(PhillyCrime)[1]
+train_index = sample(N, size = N * 0.5, replace = FALSE)
+test = PhillyCrime[train_index,] #training_data
+train = PhillyCrime[-train_index, ]#validation_data
+
+
+#sort training set by latitude (x) and longitudes (y) and put in 1 matrix
+
+train <- train[order(train$X, train$Y) ,]
+test <- test[order(test$X, test$Y) ,]
+
+#Define k vector and create misclassifcation matrix
+
+k_vec = 1:100
+MR = rep(0,100) #return values
+MR_2 = expand.grid(k_vec,MR)
+colnames(MR_2) = c("K", "MR")
+
+for(i in 1:100)
+{
+  
+  kdo = k_vec[i]
+  near <- kknn(crime_cat~X+Y, train=train, test=test, k=kdo, kernel = "rectangular")
+  MR[i] = misclassification(test$crime_cat, near$fitted.values)
+  MR_2[i, 2] = misclassification(test$crime_cat, near$fitted.values)
+
+}
+
+Q3[17,1] = k_vec[which.min(MR)]
+Q3[17,2] = min(MR)
+
+
+
+#split 18
+N = dim(PhillyCrime)[1]
+train_index = sample(N, size = N * 0.5, replace = FALSE)
+test = PhillyCrime[train_index,] #training_data
+train = PhillyCrime[-train_index, ]#validation_data
+
+
+#sort training set by latitude (x) and longitudes (y) and put in 1 matrix
+
+train <- train[order(train$X, train$Y) ,]
+test <- test[order(test$X, test$Y) ,]
+
+#Define k vector and create misclassifcation matrix
+
+k_vec = 1:100
+MR = rep(0,100) #return values
+MR_2 = expand.grid(k_vec,MR)
+colnames(MR_2) = c("K", "MR")
+
+for(i in 1:100)
+{
+  
+  kdo = k_vec[i]
+  near <- kknn(crime_cat~X+Y, train=train, test=test, k=kdo, kernel = "rectangular")
+  MR[i] = misclassification(test$crime_cat, near$fitted.values)
+  MR_2[i, 2] = misclassification(test$crime_cat, near$fitted.values)
+
+}
+
+Q3[18,1] = k_vec[which.min(MR)]
+Q3[18,2] = min(MR)
+
+
+
+#split 19
+N = dim(PhillyCrime)[1]
+train_index = sample(N, size = N * 0.5, replace = FALSE)
+test = PhillyCrime[train_index,] #training_data
+train = PhillyCrime[-train_index, ]#validation_data
+
+
+#sort training set by latitude (x) and longitudes (y) and put in 1 matrix
+
+train <- train[order(train$X, train$Y) ,]
+test <- test[order(test$X, test$Y) ,]
+
+#Define k vector and create misclassifcation matrix
+
+k_vec = 1:100
+MR = rep(0,100) #return values
+MR_2 = expand.grid(k_vec,MR)
+colnames(MR_2) = c("K", "MR")
+
+for(i in 1:100)
+{
+  
+  kdo = k_vec[i]
+  near <- kknn(crime_cat~X+Y, train=train, test=test, k=kdo, kernel = "rectangular")
+  MR[i] = misclassification(test$crime_cat, near$fitted.values)
+  MR_2[i, 2] = misclassification(test$crime_cat, near$fitted.values)
+
+}
+
+Q3[19,1] = k_vec[which.min(MR)]
+Q3[19,2] = min(MR)
+
+
+
+#split 20
+N = dim(PhillyCrime)[1]
+train_index = sample(N, size = N * 0.5, replace = FALSE)
+test = PhillyCrime[train_index,] #training_data
+train = PhillyCrime[-train_index, ]#validation_data
+
+
+#sort training set by latitude (x) and longitudes (y) and put in 1 matrix
+
+train <- train[order(train$X, train$Y) ,]
+test <- test[order(test$X, test$Y) ,]
+
+#Define k vector and create misclassifcation matrix
+
+k_vec = 1:100
+MR = rep(0,100) #return values
+MR_2 = expand.grid(k_vec,MR)
+colnames(MR_2) = c("K", "MR")
+
+for(i in 1:100)
+{
+  
+  kdo = k_vec[i]
+  near <- kknn(crime_cat~X+Y, train=train, test=test, k=kdo, kernel = "rectangular")
+  MR[i] = misclassification(test$crime_cat, near$fitted.values)
+  MR_2[i, 2] = misclassification(test$crime_cat, near$fitted.values)
+
+}
+
+Q3[20,1] = k_vec[which.min(MR)]
+Q3[20,2] = min(MR)
+
+
+Q3
+
+
+```
+
+Q3-b
+```{R}
+mean_Q3 = mean (Q3[,2])
+mean_Q3
+
+
+sd_Q3 = sd (Q3[,2])
+sd_Q3
+```
+
+Question 4
+
+```{r}
+
+Q4 = matrix(nrow=20, ncol=2)
+
+
+colnames(Q4) = c("K", "MR")
+
+#split 1
+N = dim(PhillyCrime)[1]
+train_index = sample(N, size = N * 0.9, replace = FALSE)
+test = PhillyCrime[train_index,] #training_data
+train = PhillyCrime[-train_index, ]#validation_data
+
+
+#sort training set by latitude (x) and longitudes (y) and put in 1 matrix
+
+train <- train[order(train$X, train$Y) ,]
+test <- test[order(test$X, test$Y) ,]
+
+#Define k vector and create misclassifcation matrix
+
+k_vec = 1:100
+MR = rep(0,100) #return values
+MR_2 = expand.grid(k_vec,MR)
+colnames(MR_2) = c("K", "MR")
+
+for(i in 1:100)
+{
+  
+  kdo = k_vec[i]
+  near <- kknn(crime_cat~X+Y, train=train, test=test, k=kdo, kernel = "rectangular")
+  MR[i] = misclassification(test$crime_cat, near$fitted.values)
+  MR_2[i, 2] = misclassification(test$crime_cat, near$fitted.values)
+
+}
+
+Q4[1,1] = k_vec[which.min(MR)]
+Q4[1,2] = min(MR)
+
+
+
+
+#split 2
+N = dim(PhillyCrime)[1]
+train_index = sample(N, size = N * 0.9, replace = FALSE)
+test = PhillyCrime[train_index,] #training_data
+train = PhillyCrime[-train_index, ]#validation_data
+
+
+#sort training set by latitude (x) and longitudes (y) and put in 1 matrix
+
+train <- train[order(train$X, train$Y) ,]
+test <- test[order(test$X, test$Y) ,]
+
+#Define k vector and create misclassifcation matrix
+
+k_vec = 1:100
+MR = rep(0,100) #return values
+MR_2 = expand.grid(k_vec,MR)
+colnames(MR_2) = c("K", "MR")
+
+for(i in 1:100)
+{
+  
+  kdo = k_vec[i]
+  near <- kknn(crime_cat~X+Y, train=train, test=test, k=kdo, kernel = "rectangular")
+  MR[i] = misclassification(test$crime_cat, near$fitted.values)
+  MR_2[i, 2] = misclassification(test$crime_cat, near$fitted.values)
+
+}
+
+Q4[2,1] = k_vec[which.min(MR)]
+Q4[2,2] = min(MR)
+
+
+
+#split 3
+N = dim(PhillyCrime)[1]
+train_index = sample(N, size = N * 0.9, replace = FALSE)
+test = PhillyCrime[train_index,] #training_data
+train = PhillyCrime[-train_index, ]#validation_data
+
+
+#sort training set by latitude (x) and longitudes (y) and put in 1 matrix
+
+train <- train[order(train$X, train$Y) ,]
+test <- test[order(test$X, test$Y) ,]
+
+#Define k vector and create misclassifcation matrix
+
+k_vec = 1:100
+MR = rep(0,100) #return values
+MR_2 = expand.grid(k_vec,MR)
+colnames(MR_2) = c("K", "MR")
+
+for(i in 1:100)
+{
+  
+  kdo = k_vec[i]
+  near <- kknn(crime_cat~X+Y, train=train, test=test, k=kdo, kernel = "rectangular")
+  MR[i] = misclassification(test$crime_cat, near$fitted.values)
+  MR_2[i, 2] = misclassification(test$crime_cat, near$fitted.values)
+
+}
+
+Q4[3,1] = k_vec[which.min(MR)]
+Q4[3,2] = min(MR)
+
+
+#split 4
+N = dim(PhillyCrime)[1]
+train_index = sample(N, size = N * 0.9, replace = FALSE)
+test = PhillyCrime[train_index,] #training_data
+train = PhillyCrime[-train_index, ]#validation_data
+
+
+#sort training set by latitude (x) and longitudes (y) and put in 1 matrix
+
+train <- train[order(train$X, train$Y) ,]
+test <- test[order(test$X, test$Y) ,]
+
+#Define k vector and create misclassifcation matrix
+
+k_vec = 1:100
+MR = rep(0,100) #return values
+MR_2 = expand.grid(k_vec,MR)
+colnames(MR_2) = c("K", "MR")
+
+for(i in 1:100)
+{
+  
+  kdo = k_vec[i]
+  near <- kknn(crime_cat~X+Y, train=train, test=test, k=kdo, kernel = "rectangular")
+  MR[i] = misclassification(test$crime_cat, near$fitted.values)
+  MR_2[i, 2] = misclassification(test$crime_cat, near$fitted.values)
+
+}
+
+Q4[4,1] = k_vec[which.min(MR)]
+Q4[4,2] = min(MR)
+
+
+
+#split 5
+N = dim(PhillyCrime)[1]
+train_index = sample(N, size = N * 0.9, replace = FALSE)
+test = PhillyCrime[train_index,] #training_data
+train = PhillyCrime[-train_index, ]#validation_data
+
+
+#sort training set by latitude (x) and longitudes (y) and put in 1 matrix
+
+train <- train[order(train$X, train$Y) ,]
+test <- test[order(test$X, test$Y) ,]
+
+#Define k vector and create misclassifcation matrix
+
+k_vec = 1:100
+MR = rep(0,100) #return values
+MR_2 = expand.grid(k_vec,MR)
+colnames(MR_2) = c("K", "MR")
+
+for(i in 1:100)
+{
+  
+  kdo = k_vec[i]
+  near <- kknn(crime_cat~X+Y, train=train, test=test, k=kdo, kernel = "rectangular")
+  MR[i] = misclassification(test$crime_cat, near$fitted.values)
+  MR_2[i, 2] = misclassification(test$crime_cat, near$fitted.values)
+
+}
+
+Q4[5,1] = k_vec[which.min(MR)]
+Q4[5,2] = min(MR)
+
+
+
+#split 6
+N = dim(PhillyCrime)[1]
+train_index = sample(N, size = N * 0.9, replace = FALSE)
+test = PhillyCrime[train_index,] #training_data
+train = PhillyCrime[-train_index, ]#validation_data
+
+
+#sort training set by latitude (x) and longitudes (y) and put in 1 matrix
+
+train <- train[order(train$X, train$Y) ,]
+test <- test[order(test$X, test$Y) ,]
+
+#Define k vector and create misclassifcation matrix
+
+k_vec = 1:100
+MR = rep(0,100) #return values
+MR_2 = expand.grid(k_vec,MR)
+colnames(MR_2) = c("K", "MR")
+
+for(i in 1:100)
+{
+  
+  kdo = k_vec[i]
+  near <- kknn(crime_cat~X+Y, train=train, test=test, k=kdo, kernel = "rectangular")
+  MR[i] = misclassification(test$crime_cat, near$fitted.values)
+  MR_2[i, 2] = misclassification(test$crime_cat, near$fitted.values)
+
+}
+
+Q4[6,1] = k_vec[which.min(MR)]
+Q4[6,2] = min(MR)
+
+
+
+#split 7
+N = dim(PhillyCrime)[1]
+train_index = sample(N, size = N * 0.9, replace = FALSE)
+test = PhillyCrime[train_index,] #training_data
+train = PhillyCrime[-train_index, ]#validation_data
+
+
+#sort training set by latitude (x) and longitudes (y) and put in 1 matrix
+
+train <- train[order(train$X, train$Y) ,]
+test <- test[order(test$X, test$Y) ,]
+
+#Define k vector and create misclassifcation matrix
+
+k_vec = 1:100
+MR = rep(0,100) #return values
+MR_2 = expand.grid(k_vec,MR)
+colnames(MR_2) = c("K", "MR")
+
+for(i in 1:100)
+{
+  
+  kdo = k_vec[i]
+  near <- kknn(crime_cat~X+Y, train=train, test=test, k=kdo, kernel = "rectangular")
+  MR[i] = misclassification(test$crime_cat, near$fitted.values)
+  MR_2[i, 2] = misclassification(test$crime_cat, near$fitted.values)
+
+}
+
+Q4[7,1] = k_vec[which.min(MR)]
+Q4[7,2] = min(MR)
+
+
+
+#split 8
+N = dim(PhillyCrime)[1]
+train_index = sample(N, size = N * 0.9, replace = FALSE)
+test = PhillyCrime[train_index,] #training_data
+train = PhillyCrime[-train_index, ]#validation_data
+
+
+#sort training set by latitude (x) and longitudes (y) and put in 1 matrix
+
+train <- train[order(train$X, train$Y) ,]
+test <- test[order(test$X, test$Y) ,]
+
+#Define k vector and create misclassifcation matrix
+
+k_vec = 1:100
+MR = rep(0,100) #return values
+MR_2 = expand.grid(k_vec,MR)
+colnames(MR_2) = c("K", "MR")
+
+for(i in 1:100)
+{
+  
+  kdo = k_vec[i]
+  near <- kknn(crime_cat~X+Y, train=train, test=test, k=kdo, kernel = "rectangular")
+  MR[i] = misclassification(test$crime_cat, near$fitted.values)
+  MR_2[i, 2] = misclassification(test$crime_cat, near$fitted.values)
+
+}
+
+Q4[8,1] = k_vec[which.min(MR)]
+Q4[8,2] = min(MR)
+
+
+
+#split 9
+N = dim(PhillyCrime)[1]
+train_index = sample(N, size = N * 0.9, replace = FALSE)
+test = PhillyCrime[train_index,] #training_data
+train = PhillyCrime[-train_index, ]#validation_data
+
+
+#sort training set by latitude (x) and longitudes (y) and put in 1 matrix
+
+train <- train[order(train$X, train$Y) ,]
+test <- test[order(test$X, test$Y) ,]
+
+#Define k vector and create misclassifcation matrix
+
+k_vec = 1:100
+MR = rep(0,100) #return values
+MR_2 = expand.grid(k_vec,MR)
+colnames(MR_2) = c("K", "MR")
+
+for(i in 1:100)
+{
+  
+  kdo = k_vec[i]
+  near <- kknn(crime_cat~X+Y, train=train, test=test, k=kdo, kernel = "rectangular")
+  MR[i] = misclassification(test$crime_cat, near$fitted.values)
+  MR_2[i, 2] = misclassification(test$crime_cat, near$fitted.values)
+
+}
+
+Q4[9,1] = k_vec[which.min(MR)]
+Q4[9,2] = min(MR)
+
+
+
+#split 10
+N = dim(PhillyCrime)[1]
+train_index = sample(N, size = N * 0.9, replace = FALSE)
+test = PhillyCrime[train_index,] #training_data
+train = PhillyCrime[-train_index, ]#validation_data
+
+
+#sort training set by latitude (x) and longitudes (y) and put in 1 matrix
+
+train <- train[order(train$X, train$Y) ,]
+test <- test[order(test$X, test$Y) ,]
+
+#Define k vector and create misclassifcation matrix
+
+k_vec = 1:100
+MR = rep(0,100) #return values
+MR_2 = expand.grid(k_vec,MR)
+colnames(MR_2) = c("K", "MR")
+
+for(i in 1:100)
+{
+  
+  kdo = k_vec[i]
+  near <- kknn(crime_cat~X+Y, train=train, test=test, k=kdo, kernel = "rectangular")
+  MR[i] = misclassification(test$crime_cat, near$fitted.values)
+  MR_2[i, 2] = misclassification(test$crime_cat, near$fitted.values)
+
+}
+
+Q4[10,1] = k_vec[which.min(MR)]
+Q4[10,2] = min(MR)
+
+
+
+#split 11
+N = dim(PhillyCrime)[1]
+train_index = sample(N, size = N * 0.9, replace = FALSE)
+test = PhillyCrime[train_index,] #training_data
+train = PhillyCrime[-train_index, ]#validation_data
+
+
+#sort training set by latitude (x) and longitudes (y) and put in 1 matrix
+
+train <- train[order(train$X, train$Y) ,]
+test <- test[order(test$X, test$Y) ,]
+
+#Define k vector and create misclassifcation matrix
+
+k_vec = 1:100
+MR = rep(0,100) #return values
+MR_2 = expand.grid(k_vec,MR)
+colnames(MR_2) = c("K", "MR")
+
+for(i in 1:100)
+{
+  
+  kdo = k_vec[i]
+  near <- kknn(crime_cat~X+Y, train=train, test=test, k=kdo, kernel = "rectangular")
+  MR[i] = misclassification(test$crime_cat, near$fitted.values)
+  MR_2[i, 2] = misclassification(test$crime_cat, near$fitted.values)
+
+}
+
+Q4[11,1] = k_vec[which.min(MR)]
+Q4[11,2] = min(MR)
+
+
+
+
+
+#split 12
+N = dim(PhillyCrime)[1]
+train_index = sample(N, size = N * 0.9, replace = FALSE)
+test = PhillyCrime[train_index,] #training_data
+train = PhillyCrime[-train_index, ]#validation_data
+
+
+#sort training set by latitude (x) and longitudes (y) and put in 1 matrix
+
+train <- train[order(train$X, train$Y) ,]
+test <- test[order(test$X, test$Y) ,]
+
+#Define k vector and create misclassifcation matrix
+
+k_vec = 1:100
+MR = rep(0,100) #return values
+MR_2 = expand.grid(k_vec,MR)
+colnames(MR_2) = c("K", "MR")
+
+for(i in 1:100)
+{
+  
+  kdo = k_vec[i]
+  near <- kknn(crime_cat~X+Y, train=train, test=test, k=kdo, kernel = "rectangular")
+  MR[i] = misclassification(test$crime_cat, near$fitted.values)
+  MR_2[i, 2] = misclassification(test$crime_cat, near$fitted.values)
+
+}
+
+Q4[12,1] = k_vec[which.min(MR)]
+Q4[12,2] = min(MR)
+
+
+
+#split 13
+N = dim(PhillyCrime)[1]
+train_index = sample(N, size = N * 0.9, replace = FALSE)
+test = PhillyCrime[train_index,] #training_data
+train = PhillyCrime[-train_index, ]#validation_data
+
+
+#sort training set by latitude (x) and longitudes (y) and put in 1 matrix
+
+train <- train[order(train$X, train$Y) ,]
+test <- test[order(test$X, test$Y) ,]
+
+#Define k vector and create misclassifcation matrix
+
+k_vec = 1:100
+MR = rep(0,100) #return values
+MR_2 = expand.grid(k_vec,MR)
+colnames(MR_2) = c("K", "MR")
+
+for(i in 1:100)
+{
+  
+  kdo = k_vec[i]
+  near <- kknn(crime_cat~X+Y, train=train, test=test, k=kdo, kernel = "rectangular")
+  MR[i] = misclassification(test$crime_cat, near$fitted.values)
+  MR_2[i, 2] = misclassification(test$crime_cat, near$fitted.values)
+
+}
+
+Q4[13,1] = k_vec[which.min(MR)]
+Q4[13,2] = min(MR)
+
+
+
+#split 14
+N = dim(PhillyCrime)[1]
+train_index = sample(N, size = N * 0.9, replace = FALSE)
+test = PhillyCrime[train_index,] #training_data
+train = PhillyCrime[-train_index, ]#validation_data
+
+
+#sort training set by latitude (x) and longitudes (y) and put in 1 matrix
+
+train <- train[order(train$X, train$Y) ,]
+test <- test[order(test$X, test$Y) ,]
+
+#Define k vector and create misclassifcation matrix
+
+k_vec = 1:100
+MR = rep(0,100) #return values
+MR_2 = expand.grid(k_vec,MR)
+colnames(MR_2) = c("K", "MR")
+
+for(i in 1:100)
+{
+  
+  kdo = k_vec[i]
+  near <- kknn(crime_cat~X+Y, train=train, test=test, k=kdo, kernel = "rectangular")
+  MR[i] = misclassification(test$crime_cat, near$fitted.values)
+  MR_2[i, 2] = misclassification(test$crime_cat, near$fitted.values)
+
+}
+
+Q4[14,1] = k_vec[which.min(MR)]
+Q4[14,2] = min(MR)
+
+
+
+#split 15
+N = dim(PhillyCrime)[1]
+train_index = sample(N, size = N * 0.9, replace = FALSE)
+test = PhillyCrime[train_index,] #training_data
+train = PhillyCrime[-train_index, ]#validation_data
+
+
+#sort training set by latitude (x) and longitudes (y) and put in 1 matrix
+
+train <- train[order(train$X, train$Y) ,]
+test <- test[order(test$X, test$Y) ,]
+
+#Define k vector and create misclassifcation matrix
+
+k_vec = 1:100
+MR = rep(0,100) #return values
+MR_2 = expand.grid(k_vec,MR)
+colnames(MR_2) = c("K", "MR")
+
+for(i in 1:100)
+{
+  
+  kdo = k_vec[i]
+  near <- kknn(crime_cat~X+Y, train=train, test=test, k=kdo, kernel = "rectangular")
+  MR[i] = misclassification(test$crime_cat, near$fitted.values)
+  MR_2[i, 2] = misclassification(test$crime_cat, near$fitted.values)
+
+}
+
+Q4[15,1] = k_vec[which.min(MR)]
+Q4[15,2] = min(MR)
+
+
+
+#split 16
+N = dim(PhillyCrime)[1]
+train_index = sample(N, size = N * 0.9, replace = FALSE)
+test = PhillyCrime[train_index,] #training_data
+train = PhillyCrime[-train_index, ]#validation_data
+
+
+#sort training set by latitude (x) and longitudes (y) and put in 1 matrix
+
+train <- train[order(train$X, train$Y) ,]
+test <- test[order(test$X, test$Y) ,]
+
+#Define k vector and create misclassifcation matrix
+
+k_vec = 1:100
+MR = rep(0,100) #return values
+MR_2 = expand.grid(k_vec,MR)
+colnames(MR_2) = c("K", "MR")
+
+for(i in 1:100)
+{
+  
+  kdo = k_vec[i]
+  near <- kknn(crime_cat~X+Y, train=train, test=test, k=kdo, kernel = "rectangular")
+  MR[i] = misclassification(test$crime_cat, near$fitted.values)
+  MR_2[i, 2] = misclassification(test$crime_cat, near$fitted.values)
+
+}
+
+Q4[16,1] = k_vec[which.min(MR)]
+Q4[16,2] = min(MR)
+
+
+
+#split 17
+N = dim(PhillyCrime)[1]
+train_index = sample(N, size = N * 0.9, replace = FALSE)
+test = PhillyCrime[train_index,] #training_data
+train = PhillyCrime[-train_index, ]#validation_data
+
+
+#sort training set by latitude (x) and longitudes (y) and put in 1 matrix
+
+train <- train[order(train$X, train$Y) ,]
+test <- test[order(test$X, test$Y) ,]
+
+#Define k vector and create misclassifcation matrix
+
+k_vec = 1:100
+MR = rep(0,100) #return values
+MR_2 = expand.grid(k_vec,MR)
+colnames(MR_2) = c("K", "MR")
+
+for(i in 1:100)
+{
+  
+  kdo = k_vec[i]
+  near <- kknn(crime_cat~X+Y, train=train, test=test, k=kdo, kernel = "rectangular")
+  MR[i] = misclassification(test$crime_cat, near$fitted.values)
+  MR_2[i, 2] = misclassification(test$crime_cat, near$fitted.values)
+
+}
+
+Q4[17,1] = k_vec[which.min(MR)]
+Q4[17,2] = min(MR)
+
+
+
+#split 18
+N = dim(PhillyCrime)[1]
+train_index = sample(N, size = N * 0.9, replace = FALSE)
+test = PhillyCrime[train_index,] #training_data
+train = PhillyCrime[-train_index, ]#validation_data
+
+
+#sort training set by latitude (x) and longitudes (y) and put in 1 matrix
+
+train <- train[order(train$X, train$Y) ,]
+test <- test[order(test$X, test$Y) ,]
+
+#Define k vector and create misclassifcation matrix
+
+k_vec = 1:100
+MR = rep(0,100) #return values
+MR_2 = expand.grid(k_vec,MR)
+colnames(MR_2) = c("K", "MR")
+
+for(i in 1:100)
+{
+  
+  kdo = k_vec[i]
+  near <- kknn(crime_cat~X+Y, train=train, test=test, k=kdo, kernel = "rectangular")
+  MR[i] = misclassification(test$crime_cat, near$fitted.values)
+  MR_2[i, 2] = misclassification(test$crime_cat, near$fitted.values)
+
+}
+
+Q4[18,1] = k_vec[which.min(MR)]
+Q4[18,2] = min(MR)
+
+
+
+#split 19
+N = dim(PhillyCrime)[1]
+train_index = sample(N, size = N * 0.9, replace = FALSE)
+test = PhillyCrime[train_index,] #training_data
+train = PhillyCrime[-train_index, ]#validation_data
+
+
+#sort training set by latitude (x) and longitudes (y) and put in 1 matrix
+
+train <- train[order(train$X, train$Y) ,]
+test <- test[order(test$X, test$Y) ,]
+
+#Define k vector and create misclassifcation matrix
+
+k_vec = 1:100
+MR = rep(0,100) #return values
+MR_2 = expand.grid(k_vec,MR)
+colnames(MR_2) = c("K", "MR")
+
+for(i in 1:100)
+{
+  
+  kdo = k_vec[i]
+  near <- kknn(crime_cat~X+Y, train=train, test=test, k=kdo, kernel = "rectangular")
+  MR[i] = misclassification(test$crime_cat, near$fitted.values)
+  MR_2[i, 2] = misclassification(test$crime_cat, near$fitted.values)
+
+}
+
+Q4[19,1] = k_vec[which.min(MR)]
+Q4[19,2] = min(MR)
+
+
+
+#split 20
+N = dim(PhillyCrime)[1]
+train_index = sample(N, size = N * 0.9, replace = FALSE)
+test = PhillyCrime[train_index,] #training_data
+train = PhillyCrime[-train_index, ]#validation_data
+
+
+#sort training set by latitude (x) and longitudes (y) and put in 1 matrix
+
+train <- train[order(train$X, train$Y) ,]
+test <- test[order(test$X, test$Y) ,]
+
+#Define k vector and create misclassifcation matrix
+
+k_vec = 1:100
+MR = rep(0,100) #return values
+MR_2 = expand.grid(k_vec,MR)
+colnames(MR_2) = c("K", "MR")
+
+for(i in 1:100)
+{
+  
+  kdo = k_vec[i]
+  near <- kknn(crime_cat~X+Y, train=train, test=test, k=kdo, kernel = "rectangular")
+  MR[i] = misclassification(test$crime_cat, near$fitted.values)
+  MR_2[i, 2] = misclassification(test$crime_cat, near$fitted.values)
+
+}
+
+Q4[20,1] = k_vec[which.min(MR)]
+Q4[20,2] = min(MR)
+
+
+
+```
+
+Q4-a
+
+```{R}
+MR_sub <- subset(MR_2, MR > 0)
+plot(MR_sub)
+```
+Q4-b
+
+```{R}
+
+kbest = k_vec[which.min(MR)]
+min(MR)
+nearbest <- kknn(crime_cat~X+Y, train=train, test=test, k=kbest, kernel = "rectangular")
+#test$crime_cat_predict = ifelse(nearbest$fitted.values > 0.5, 1, 0)
+
+test$crime_cat_predict = nearbest$fitted.values
+
+plot(test$X, test$Y, col=c("red","blue")[as.factor(test$crime_cat_predict)],main = "Crime Predict", xlab = "Latitude", ylab = "Longitude",cex=0.25)
+legend("topright",legend=c("Thefts","Vandalism"),lwd=1,col=c("red","blue"))
+```
+
+Q4-c,d
+
+```{R}
+Q4
+mean_Q4 = mean (Q4[,2])
+mean_Q4
+
+
+sd_Q4 = sd (Q4[,2])
+sd_Q4
+```
+
+
+
+Question 5
+
+```{R}
+
+#Divide into 50% training and 50% test test
+set.seed(100)
+
+N = dim(PhillyCrime)[1]
+train_index = sample(N, size = N * 0.5, replace = FALSE)
+test = PhillyCrime[train_index,] #training_data
+train = PhillyCrime[-train_index, ]#validation_data
+
+
+#sort training set by latitude (x) and longitudes (y) and put in 1 matrix
+
+train <- train[order(train$X, train$Y) ,]
+test <- test[order(test$X, test$Y) ,]
+
+near_25 <- kknn(crime_cat~X+Y, train=train, test=test, k=25, kernel = "rectangular")
+MR_25 = misclassification(test$crime_cat, near_25$fitted.values)
+plot(c(0,1),c(0,1),xlab='FPR',ylab='TPR',main="ROC curve",cex.lab=1,type="n")
+pred = prediction(near_25$fitted.values, test$crime_cat)
+perf = performance(pred, measure = "tpr", x.measure = "fpr")
+lines(perf@x.values[[1]], perf@y.values[[1]],col=i)
+
+abline(0,1,lty=2)
+
+```
+
+ 
+

@@ -1,0 +1,404 @@
+---
+title: 'Boston Housing: KNN; Bias-Variance Trade-Off; Cross Validation'
+author: 'Chicago Booth ML Team'
+output: pdf_document
+fontsize: 12
+geometry: margin=0.6in
+---
+
+
+# OVERVIEW
+
+This R Markdown script uses the **_Boston Housing_** data set to illustrate the following:
+
+- The **$k$-Nearest Neighbors** (**KNN**) algorithm;
+- The **Bias-Variance Trade-Off**; and
+- The use of **Cross Validation** to estimate Out-of-Sample (OOS) prediction error and determine optimal hyper-parameters, in this case the number of nearest neighbors $k$.
+
+
+# _first, some boring logistics..._
+
+Let's first load some necessary R packages and helper functions and set the random number generator's seed:
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+# Install necessary packages, just in case they are not yet installed
+install.packages(c('data.table', 'ggplot2', 'kknn'),
+                 dependencies=TRUE,
+                 repos='http://cran.rstudio.com')
+
+```
+```{r}
+install.packages("rpart.plot")
+```
+
+```{r message=FALSE}
+# load CRAN libraries from CRAN packages
+library(data.table)
+library(rpart)
+library(rpart.plot)
+library(tree)
+library(ggplot2)
+library(kknn)
+
+
+# load modules from the common HelpR repo
+helpr_repo_raw_url <- 'https://raw.githubusercontent.com/ChicagoBoothML/HelpR/master'
+source(file.path(helpr_repo_raw_url, 'docv.R'))   # this has docvknn used below
+
+#Read in data
+dt <- fread("UsedCars.csv", header=TRUE,
+            stringsAsFactors=TRUE)
+names(dt)[2:dim(dt)[2]]
+
+dt2 <- dt[,.(`price`,`mileage`,`year`)]
+# remove rows with missing value
+dt2 <- dt2[complete.cases(dt2*0),]
+n <- dim(dt2)[1]
+# colnames(dt2) <- c("score", "abv", "age")
+
+# count number of samples
+nb_samples <- nrow(dt)
+
+# sort data set by increasing mileage
+setkey(dt2, mileage, year)
+
+dt1 <- dt2[,.(price,mileage)]
+summary(dt2)
+
+
+
+```
+
+Question 2.1:
+
+The Used Car data provides information about used cars, including their age, color, usage, owner history, and price. There are a number of business problems one could solve with this data. For example, if you are a company that buys and resells used cars, using this data to create a predictive model of the price of the vehicle could help you avoid losses by making sure you never overbid on a used car. The information could also help you understand the popularity or demand for different features of a car (such as its color, fuel type, and sound system). The used car market is often one of asymmetric information on the quality of a vehicle. A business would collect this data and create a machine learning algorithm ultimately to mitigate this issue, have a better idea of the value of used vehicles, and reduce the risk of buying lemons. 
+
+Question 2.2: Split The Data
+
+```{r message=FALSE}
+
+
+# set randomizer's seed
+set.seed(99)   # Gretzky was #99
+
+# Split the data
+n_train <- round(n*0.75,0) # approximately 75% of data
+tr_idx <- sample(1:n, n_train)
+train <- dt1[tr_idx,]
+test <- dt1[-tr_idx,]
+
+train2 <- dt2[tr_idx,]
+test2 <- dt2[-tr_idx,]
+
+train_all <- dt[tr_idx,]
+test_all <- dt[-tr_idx,]
+
+## Need to resort training df after taking sample
+setkey(train, mileage)
+setkey(train2, mileage, year)
+setkey(train_all, mileage)
+
+```
+
+Question 2.3: Fit linear regression model and create a scatter plot
+
+```{r message=FALSE}
+linear <- lm(price~mileage, data=train)
+#Create scatter plot and best linear fit
+
+plot(train$mileage, train$price, cex=.5, pch=16)
+yhat=predict(linear, train)
+lines(train$mileage, yhat, col="red", lwd=3)
+```
+
+Question 2.4: Fit Polynomial Regression and Choose Best Degree through Cross Validation
+
+```{r}
+
+#--------------------------------------------------
+#cv version for polynomial regression
+docvpoly = function(x,y,d,nfold=10,doran=TRUE,verbose=TRUE) {
+  return(docv(x,y,matrix(d,ncol=1),dopoly,mse,nfold=nfold,doran=doran,verbose=verbose))
+}
+
+dopoly=function(x,y,xp,d) {
+  train = data.frame(x,y=y)
+  test = data.frame(xp); names(test) = names(train)[1:(ncol(train)-1)]
+  fit = lm(y~poly(x, degree=d[1]), train)
+  return (predict.lm(fit, test))
+}
+#--------------------------------------------------
+
+## Run multiple CVs across multiple degrees
+dv=1:6
+cv1=docvpoly(matrix(train$mileage,ncol=1),train$price,dv,nfold=5)
+cv2=docvpoly(matrix(train$mileage,ncol=1),train$price,dv,nfold=5)
+cv3=docvpoly(matrix(train$mileage,ncol=1),train$price,dv,nfold=5)
+cv4=docvpoly(matrix(train$mileage,ncol=1),train$price,dv,nfold=10)
+cv5=docvpoly(matrix(train$mileage,ncol=1),train$price,dv,nfold=10)
+
+#convert output to MSE
+cv1 = cv1/n_train
+cv2 = cv2/n_train
+cv3 = cv3/n_train
+cv4 = cv4/n_train
+cv5 = cv5/n_train
+
+# Create CV Mean
+cv.mean=(cv1+cv2+cv3+cv4+cv5)/5
+
+# Plot Cross Validation curves
+ld = log(1/dv)
+plot(ld,cv1,type="l",col="red",lwd=2,
+     cex.lab=0.8, xlab="log(1/degrees of polynomial)", ylab="MSE")
+lines(ld,cv2,col="blue",lwd=2)
+lines(ld,cv3,col="green",lwd=2)
+lines(ld,cv4,col="yellow",lwd=2)
+lines(ld,cv5,col="purple",lwd=2)
+
+legend("topleft",legend=c("cv=1","cv=2","cv=3","cv=4","cv=5"),
+       col=c("red","blue","green","yellow","purple"),lwd=2,cex=0.8)
+
+plot(dv, cv.mean)
+
+## Select best degree (minimum MSE)
+dv_best = dv[which.min(cv.mean)]
+cat("the best degree is: ",dv_best,"\n")
+
+## Refit Optimal Degree Polynomial to training data and graph
+dv.best <- lm(price~poly(mileage,dv_best),data=train)
+mileagelims=range(train$mileage)
+mileage.grid=seq(from=mileagelims [1],to=mileagelims [2])
+
+preds=predict(dv.best,newdata =list(mileage=mileage.grid),se=TRUE)
+plot(train$mileage, train$price, cex=.5, pch=16)
+lines(mileage.grid, preds$fit,lwd=2,col="blue")
+```
+
+
+Question 2.5: K-Nearest Neighbors Cross Validation
+```{r message=FALSE}
+
+k_vec <- seq(from =400, to=700, by=10) # vector of k to loop over
+
+cv1 <- docvknn(matrix(train$mileage,ncol=1), train$price, k_vec,
+nfold=5)
+cv2 <- docvknn(matrix(train$mileage,ncol=1), train$price, k_vec,
+nfold=5)
+cv3 <- docvknn(matrix(train$mileage,ncol=1), train$price, k_vec,
+nfold=10)
+cv1=cv1/n_train
+cv2=cv2/n_train
+cv3=cv3/n_train
+
+
+
+# plot average
+
+rgy = range(c(cv1,cv2,cv3))
+plot(log(1/k_vec),cv1,type="l",col="red",ylim=rgy,lwd=2,
+     cex.lab=0.8, xlab="log(1/k)", ylab="MSE")
+lines(log(1/k_vec),cv2,col="blue",lwd=2)
+lines(log(1/k_vec),cv3,col="green",lwd=2)
+legend("topleft",legend=c("5-fold 1","5-fold 2","10 fold"),
+       col=c("red","blue","green"),lwd=2,cex=0.8)
+
+cv = (cv1+cv2+cv3)/3 #use average
+plot(k_vec, cv)
+
+
+k_best = k_vec[which.min(cv)]
+cat("the best k is: ",k_best,"\n")
+
+
+near_best <- kknn(price~mileage, train=train, test=dt1[,.(mileage)],
+k=k_best, kernel='rectangular')
+plot(dt1$mileage, dt1$price, cex.lab=1.2)
+lines(dt1$mileage, near_best$fitted, col="red", lwd=2, cex.lab=2)
+
+```
+
+
+Question 2.5 (cont'd): Regression Tree Cross Validation
+
+```{r message=FALSE}
+
+# Create big tree using greedy strategy
+big.tree=rpart(price~mileage, data=dt1,
+control=rpart.control(minsplit=5,
+cp=0.0001,
+xval=10))
+nbig = length(unique(big.tree$where))
+cat('size of big tree: ',nbig,'\n')
+
+## Find the best size of tree cp
+cptable = printcp(big.tree)
+
+# Identify optimal cp parameter
+bestcp = cptable[ which.min(big.tree$cptable[,"xerror"]), "CP" ]
+plotcp(big.tree) # plot results
+
+#Prune down the optimal tree
+par(mfrow=c(1,1))
+best.tree=prune(big.tree, cp=bestcp)
+rpart.plot(best.tree)
+
+# Add all fitted values to dataframe 1
+dt1[,`:=`(lm_fit=yhat, knn_fit=near_best$fitted,
+tree_fit=predict(best.tree))]
+
+
+##Plot the fitted values on a scatterplot
+
+plot(dt1$mileage, dt1$price, pch=16, col='blue', cex=0.5, ylab = "Price", xlab = "Mileage")
+lines(mileage.grid, preds$fit,lwd=2,col="red")
+lines(dt1$mileage, near_best$fitted, col="green", lwd=2, cex.lab=2)
+lines(dt1$mileage, dt1$tree_fit, col="yellow", lwd=2)
+legend("bottomright",legend=c("y=price","lm","knn","tree"),
+col=c("blue","red","green","yellow"),lwd=2,cex=1.5)
+```
+
+Question 2.5 (cont'd): Pick the best performing model
+
+The tree performs the best. This is because the tree has the lowest average Mean Squared Error of all the mmodels. 
+
+```{r message=FALSE}
+MSE <- dt1[-tr_idx,
+lapply(.SD,function(x) (x-price)^2),
+.SDcols=paste0(c("lm", "knn", "tree"),"_fit")]
+MSE[,lapply(.SD, mean),
+.SDcols=paste0(c("lm", "knn", "tree"),"_fit")]
+
+test[,`:=`(fit=predict(best.tree,test))]
+
+MSE_test <- test[,.(error=(fit-price)^2)]
+MSE_test[,mean(error)]
+cat('The test error of the tree is: ',MSE_test[,mean(error)],'\n')
+ 
+
+```
+
+
+
+Question 2.6: Regression Tree for Multivariate
+```{r}
+
+temp2 = rpart(price~., data = dt2, control = rpart.control(minsplit=5, cp=0.001, xval=0))
+rpart.plot(temp2)
+
+#Prune down the optimal tree
+best.tree2=prune(temp2, cp=0.008)
+rpart.plot(best.tree2)
+
+```
+
+Question 2.6: k-NN when x is multivariate
+
+The best k decreases dramatically when you introduce a second variable. In this case, the best k drops from ~500 to 100. Similarly, the best tree size is much smaller than when there was only one explanatory variable. 
+
+```{r message=FALSE}
+
+#Scale input variables
+
+scf = function(x) ((x-min(x))/(max(x)-min(x)))
+dt2[,`:=`(mileage = scf(mileage), year = scf(year))]
+
+k_vec2 <- seq(from =50, to=800, by=50) # vector of k to loop over
+
+dt2_cv1 <- docvknn(train2[,.(mileage, year)], train$price, k_vec2,
+nfold=5)
+dt2_cv2 <- docvknn(train2[,.(mileage, year)], train$price, k_vec2,
+nfold=5)
+dt2_cv3 <- docvknn(train2[,.(mileage, year)], train$price, k_vec2,
+nfold=10)
+dt2_cv1=dt2_cv1/n_train
+dt2_cv2=dt2_cv2/n_train
+dt2_cv3=dt2_cv3/n_train
+
+
+
+# plot average
+
+lk2 <- log(1/k_vec2)
+rgy = range(c(dt2_cv1,dt2_cv2,dt2_cv3))
+plot(lk2,dt2_cv1,type="l",col="red",ylim=rgy,lwd=2,
+     cex.lab=0.8, xlab="log(1/k)", ylab="MSE")
+lines(lk2,dt2_cv2,col="blue",lwd=2)
+lines(lk2,dt2_cv3,col="green",lwd=2)
+legend("topleft",legend=c("5-fold 1","5-fold 2","10 fold"),
+       col=c("red","blue","green"),lwd=2,cex=0.8)
+
+dt2_cv = (dt2_cv1+dt2_cv2+dt2_cv3)/3 #use average
+plot(k_vec2, dt2_cv)
+
+
+k_best2 = k_vec2[which.min(dt2_cv)]
+cat("the best k is: ",k_best2,"\n")
+```
+
+```{r}
+
+dt1.knn <- kknn(price~mileage, train = train, test = test, k = k_best, kernel = "rectangular")
+dt2.knn <- kknn(price~., train = train2, test = test2, k = k_best2, kernel = "rectangular")
+
+test[, "knn_fit"] <- dt1.knn$fitted.values
+test2[,"knn_fit"] <- dt2.knn$fitted.values
+
+MSE1 <- test[,
+lapply(.SD,function(x) (x-price)^2),
+.SDcols='knn_fit']
+MSE1[,lapply(.SD, mean),
+.SDcols='knn_fit']
+
+MSE2 <- test2[,
+lapply(.SD,function(x) (x-price)^2),
+.SDcols='knn_fit']
+MSE2[,lapply(.SD, mean),
+.SDcols='knn_fit']
+
+cat('Yes, the model performs better when including year. The mean MSE is lower, at a value of: ', min(MSE2[,lapply(.SD,mean)]),'\n')
+
+```
+
+
+```{r}
+
+big.tree.all = rpart(price~., data = train_all, control = rpart.control(minsplit=5, cp=0.0001, xval=10))
+nbig_all = length(unique(big.tree.all$where))
+cat('size of big tree: ', nbig_all, '\n')
+
+cptable_all = printcp(big.tree.all)
+
+# Identify optimal cp parameter
+bestcp_all = cptable_all[ which.min(big.tree.all$cptable[,"xerror"]), "CP" ]
+plotcp(big.tree.all) # plot results
+
+bestcp_all
+
+#Prune down the optimal tree
+best.tree.all=prune(big.tree.all, cp=bestcp_all)
+rpart.plot(best.tree.all)
+
+```
+
+```{r}
+
+# Add all fitted values to dataframe 1
+dt[,`:=`(tree_fit=predict(best.tree.all))]
+
+
+MSE_all <- dt[-tr_idx,
+lapply(.SD,function(x) (x-price)^2),
+.SDcols='tree_fit']
+MSE_all[,lapply(.SD, mean),
+.SDcols='tree_fit']
+
+test_all[,`:=`(fit=predict(best.tree.all,test_all))]
+
+MSE_test_all <- test_all[,.(error=(fit-price)^2)]
+MSE_test_all[,mean(error)]
+cat('The test error of the tree is: ',MSE_test_all[,mean(error)],'\n')
+
+```
+
+
